@@ -1020,6 +1020,12 @@ th {
   fill: var(--ink);
 }
 
+.chart-tag-label {
+  font-size: 9px;
+  font-weight: 500;
+  fill: var(--ink-soft);
+}
+
 .chart-axis-label {
   font-size: 9.5px;
   fill: var(--ink-soft);

@@ -215,13 +215,8 @@ export default function DashboardPage() {
 
             <div className="stat-grid">
               <StatTile label="Total leads (in range)" value={stats.total.toLocaleString()} />
-              <StatTile
-                label="Needs follow-up now"
-                value={stats.needsFollowUp.length.toLocaleString()}
-                delta={stats.needsFollowUp.length > 0 ? `${MATURE_DAYS}+ days, no update` : ""}
-                deltaGood={stats.needsFollowUp.length === 0}
-              />
-              <StatTile label="Active pipeline" value={stats.activePipeline.toLocaleString()} />
+              <StatTile label="Follow-up" value={stats.followUp.toLocaleString()} />
+              <StatTile label="Active (Follow-up + Pending + Check)" value={stats.activePipeline.toLocaleString()} />
               <StatTile
                 label={`Drop rate (${MATURE_DAYS}+ day leads)`}
                 value={stats.dropRateMatured !== null ? `${stats.dropRateMatured}%` : "—"}
@@ -303,13 +298,28 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="chart-card" style={{ marginTop: "1.25rem" }}>
-              <div className="chart-card-title">Top {stats.topProperties.length} most-enquired properties</div>
-              {stats.topProperties.length ? (
-                <HBarChart data={stats.topProperties} />
-              ) : (
-                <p className="muted small">No property data yet.</p>
-              )}
+            <div className="dashboard-grid" style={{ marginTop: "1.25rem" }}>
+              <div className="chart-card">
+                <div className="chart-card-title">
+                  Top {stats.topPropertiesByStatus.active.length} most-enquired properties — Active
+                </div>
+                {stats.topPropertiesByStatus.active.length ? (
+                  <HBarChart data={stats.topPropertiesByStatus.active} />
+                ) : (
+                  <p className="muted small">No active-listing property data yet.</p>
+                )}
+              </div>
+
+              <div className="chart-card">
+                <div className="chart-card-title">
+                  Top {stats.topPropertiesByStatus.expired.length} most-enquired properties — Expired
+                </div>
+                {stats.topPropertiesByStatus.expired.length ? (
+                  <HBarChart data={stats.topPropertiesByStatus.expired} />
+                ) : (
+                  <p className="muted small">No expired-listing property data yet.</p>
+                )}
+              </div>
             </div>
 
             <div className="chart-card" style={{ marginTop: "1.25rem" }}>
@@ -343,7 +353,9 @@ export default function DashboardPage() {
                   <tbody>
                     {filteredPropertyRows.map((r) => {
                       const compiled = parseCompiledLinks(propertyLinksByName[r.property_name.trim().toLowerCase()] || "");
-                      const rowLinks = compiled.length ? compiled : r.links.map((url) => ({ label: linkLabel(url), url }));
+                      const rowLinks = sortLinksByPriority(
+                        mergeLinks(compiled, r.links.map((url) => ({ label: linkLabel(url), url })))
+                      );
                       return (
                         <tr key={r.property_name}>
                           <td>{r.property_name}</td>
@@ -526,7 +538,16 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now) {
   const total = filteredLeads.length;
 
   const statusCounts = countBy(filteredLeads, "customer_status");
-  const activePipeline = (statusCounts["Follow-up"] || 0) + (statusCounts["Pending"] || 0);
+  // Your definitions: Follow-up = leads with status "Follow-up" only;
+  // Active pipeline = Follow-up + Pending + Check. Matched loosely on
+  // spelling ("Follow up", "follow-up", "Followup" all count).
+  const byKey = {};
+  for (const l of filteredLeads) {
+    const k = statusKey(l.customer_status);
+    byKey[k] = (byKey[k] || 0) + 1;
+  }
+  const followUp = byKey.followup || 0;
+  const activePipeline = followUp + (byKey.pending || 0) + (byKey.check || 0);
   const customerStatus = toChartData(statusCounts).sort((a, b) => b.value - a.value);
 
   const propertyTypeCounts = countBy(
@@ -543,20 +564,27 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now) {
   // chance to drop yet, so including it would understate the real rate.
   const matured = filteredLeads.filter((l) => l.enquiry_date && daysSince(l.enquiry_date, now) >= MATURE_DAYS);
   const dropRateMatured = matured.length
-    ? Math.round((matured.filter((l) => (l.customer_status || "").trim() === "Drop").length / matured.length) * 100)
+    ? Math.round((matured.filter((l) => statusKey(l.customer_status) === "drop").length / matured.length) * 100)
     : null;
 
   // Needs-follow-up: always computed from ALL leads (not the date-range
   // filter) and against the real current date — it's a live to-do list.
   const needsFollowUp = computeFollowUps(allLeads, now);
 
-  const topProperties = computeTopProperties(filteredLeads);
+  const topPropertiesByStatus = computeTopPropertiesByStatus(filteredLeads);
 
   const leadSource = toChartData(countBy(filteredLeads, "source_data")).sort((a, b) => b.value - a.value);
 
   // Reason taxonomy — grouped (chart) + raw (audit table), scoped to the
   // selected date range.
-  const reasonCounts = countBy(filteredLeads, "customer_status_reason");
+  // Unlike the other breakdowns, this one is deliberately scoped to leads
+  // that actually have a reason recorded (mostly Drop-status leads) — most
+  // leads never get one (they're still active), so including blanks here
+  // would just bury the real reasons under one giant "no reason yet" bar.
+  const reasonCounts = countBy(
+    filteredLeads.filter((l) => (l.customer_status_reason || "").trim()),
+    "customer_status_reason"
+  );
   const groupedCounts = {};
   let groupedTotal = 0;
   for (const [raw, count] of Object.entries(reasonCounts)) {
@@ -568,9 +596,7 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now) {
   const dropReasonsGrouped = Object.entries(groupedCounts)
     .map(([label, value]) => ({ label, value, pct: groupedTotal ? Math.round((value / groupedTotal) * 100) : 0 }))
     .sort((a, b) => b.value - a.value);
-  const dropReasonsRaw = toChartData(reasonCounts)
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 15);
+  const dropReasonsRaw = toChartData(reasonCounts).sort((a, b) => b.value - a.value);
 
   const propertyTable = computePropertyTable(filteredLeads);
   const repeatCustomers = computeRepeatCustomers(filteredLeads);
@@ -579,10 +605,11 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now) {
   return {
     total,
     activePipeline,
+    followUp,
     dropRateMatured,
     customerStatus,
     propertyType,
-    topProperties,
+    topPropertiesByStatus,
     leadSource,
     dropReasonsGrouped,
     dropReasonsRaw,
@@ -621,16 +648,46 @@ function normalizeUrl(url) {
 // compiled into one cell, e.g. "Propertyguru: https://…  99.co:
 // https://…  SRX: https://…  EdgeProp: https://…". Pulls each labeled
 // link out as its own {label, url} entry.
+// Pulls every URL out of a Property_master link cell, whether it's a bare
+// URL ("https://www.propertyguru.com.sg/…") or several labeled ones
+// ("Propertyguru: https://…  99.co: https://…"). Each is labeled by its
+// domain, so the label is consistent no matter how the cell was typed.
 function parseCompiledLinks(text) {
   if (!text) return [];
   const out = [];
-  const re = /([A-Za-z0-9][A-Za-z0-9 .]{0,20}?):\s*(https?:\/\/\S+)/g;
+  const re = /https?:\/\/[^\s"'<>]+/g;
   let m;
   while ((m = re.exec(text)) !== null) {
-    const url = normalizeUrl(m[2]);
-    if (url) out.push({ label: m[1].trim(), url });
+    const url = normalizeUrl(m[0].replace(/[),.;]+$/, ""));
+    if (url) out.push({ label: linkLabel(url), url });
   }
   return out;
+}
+
+// Property_master links first, then any extra platforms only seen on
+// leads — one link per platform (Property_master wins a tie).
+function mergeLinks(masterLinks, leadLinks) {
+  const seen = new Set();
+  const out = [];
+  for (const l of [...masterLinks, ...leadLinks]) {
+    const key = l.label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(l);
+  }
+  return out;
+}
+
+// Your priority order for which listing platform to lead with — everything
+// else (SRX, CommercialGuru, …) sorts after these, in whatever order it
+// was found.
+const LINK_PRIORITY = ["propertyguru", "99.co", "edgeprop"];
+function sortLinksByPriority(links) {
+  const rank = (l) => {
+    const i = LINK_PRIORITY.findIndex((p) => l.label.toLowerCase().includes(p));
+    return i === -1 ? LINK_PRIORITY.length : i;
+  };
+  return [...links].sort((a, b) => rank(a) - rank(b));
 }
 
 // A short, human label for a listing URL, so multiple links on the same
@@ -663,10 +720,11 @@ function computePropertyTable(leads) {
     const row = map[name];
     row.total++;
     const status = (l.customer_status || "").trim();
-    if (status === "Drop") row.drop++;
-    else if (status === "Follow-up") row.followUp++;
-    else if (status === "Pending") row.pending++;
-    else if (status === "Check") row.check++;
+    const k = statusKey(status);
+    if (k === "drop") row.drop++;
+    else if (k === "followup") row.followUp++;
+    else if (k === "pending") row.pending++;
+    else if (k === "check") row.check++;
 
     if (l.property_link) {
       const url = normalizeUrl(l.property_link);
@@ -678,11 +736,11 @@ function computePropertyTable(leads) {
     .sort((a, b) => b.total - a.total);
 }
 
-// Top-N properties by enquiry count, with the Rent/Sale status folded
-// into the label ("Suites at Orchard, Rent") — same "most recent value
-// wins" approach as the listing link, since a property's status can
-// change between enquiries (e.g. relisted from Sale to Rent).
-function computeTopProperties(leads, limit = 10) {
+// Top-N properties by enquiry count, split into separate Active/Expired
+// lists rather than one mixed list — a property's status is its most
+// recent recorded value (same "most recent wins" approach as the listing
+// link), since it can change between enquiries (e.g. relisted).
+function computeTopPropertiesByStatus(leads, limit = 10) {
   const map = {};
   for (const l of leads) {
     const name = (l.property_name || "").trim();
@@ -699,10 +757,17 @@ function computeTopProperties(leads, limit = 10) {
       }
     }
   }
-  return Object.values(map)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, limit)
-    .map((r) => ({ label: r.status ? `${r.name}, ${r.status}` : r.name, value: r.count }));
+  const all = Object.values(map);
+  const topWithStatus = (status) =>
+    all
+      .filter((r) => r.status === status)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, limit)
+      .map((r) => ({ label: r.name, value: r.count }));
+  return {
+    active: topWithStatus("Active"),
+    expired: topWithStatus("Expired"),
+  };
 }
 
 function computeRepeatCustomers(leads) {
@@ -729,11 +794,21 @@ function computeRepeatCustomers(leads) {
     .sort((a, b) => b.count - a.count);
 }
 
+// "Follow-up" / "Follow up" / "followup " → "followup", so small spelling
+// or spacing differences in the sheet don't split one status into two.
+function statusKey(s) {
+  return (s || "").toLowerCase().replace(/[^a-z]/g, "");
+}
+
+// Includes blank/missing values as their own "(blank)" bucket rather than
+// silently dropping them — so a chart's bars always add up to the same
+// total as "Total leads (in range)" above it, instead of quietly
+// under-reporting whenever a field is empty for some rows.
 function countBy(leads, field) {
   const counts = {};
   for (const l of leads) {
-    const v = (l[field] || "").trim();
-    if (!v) continue;
+    const raw = (l[field] || "").trim();
+    const v = raw || "(blank)";
     counts[v] = (counts[v] || 0) + 1;
   }
   return counts;

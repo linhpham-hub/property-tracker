@@ -8,7 +8,7 @@ export default function HBarChart({ data, barHeight = 22, rowGap = 14, valueForm
   const [hoverIdx, setHoverIdx] = useState(null);
   const width = 560;
   const labelWidth = 172;
-  const padding = { top: 6, right: 64, bottom: 6 };
+  const padding = { top: 6, right: 110, bottom: 6 };
   const chartAreaWidth = width - labelWidth - padding.right;
   const rowHeight = barHeight + rowGap;
   const height = data.length * rowHeight + padding.top + padding.bottom - rowGap;
@@ -50,8 +50,15 @@ export default function HBarChart({ data, barHeight = 22, rowGap = 14, valueForm
                 pointerEvents="none"
               />
               <text x={labelWidth + barW + 8} y={y + barHeight / 2 + 3.5} className="chart-value-label" pointerEvents="none">
-                {valueFormat(d.value)}
-                {d.pct != null ? ` (${d.pct}%)` : ""}
+                <tspan>
+                  {valueFormat(d.value)}
+                  {d.pct != null ? ` (${d.pct}%)` : ""}
+                </tspan>
+                {d.tag && (
+                  <tspan dx="10" className="chart-tag-label">
+                    {d.tag}
+                  </tspan>
+                )}
               </text>
             </g>
           );
