@@ -77,9 +77,23 @@ export default function DashboardPage() {
   }
 
   async function loadProperties() {
-    const { data } = await supabase.from("properties").select("id, property_name");
+    const { data } = await supabase.from("properties").select("id, property_name, property_link");
     setProperties(data || []);
   }
+
+  // The Property_master sheet's own Property_link cell is the reliable,
+  // complete source for a property's listings — often "Propertyguru: url
+  //   99.co: url   SRX: url   EdgeProp: url" all in one cell. A single
+  // lead's own property_link (from Data_raw) only ever has one platform's
+  // link, and is sometimes not a URL at all (a mis-entered address), so
+  // this is preferred whenever the property name matches.
+  const propertyLinksByName = useMemo(() => {
+    const map = {};
+    for (const p of properties) {
+      if (p.property_name) map[p.property_name.trim().toLowerCase()] = p.property_link || "";
+    }
+    return map;
+  }, [properties]);
 
   // Lets "Leads by property" / "Needs follow-up" link straight to the
   // matching property page — 11 Amber Road_1/_2/_3 etc. are otherwise
@@ -225,20 +239,20 @@ export default function DashboardPage() {
               </div>
 
               <div className="chart-card">
+                <div className="chart-card-title">Leads by source</div>
+                {stats.leadSource.length ? (
+                  <DonutChart data={stats.leadSource} />
+                ) : (
+                  <p className="muted small">No source data yet.</p>
+                )}
+              </div>
+
+              <div className="chart-card">
                 <div className="chart-card-title">Property type interest</div>
                 {stats.propertyType.length ? (
                   <BarChart data={stats.propertyType} />
                 ) : (
                   <p className="muted small">No property type data yet.</p>
-                )}
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">Top {stats.topProperties.length} most-enquired properties</div>
-                {stats.topProperties.length ? (
-                  <HBarChart data={stats.topProperties} />
-                ) : (
-                  <p className="muted small">No property data yet.</p>
                 )}
               </div>
 
@@ -290,14 +304,11 @@ export default function DashboardPage() {
             </div>
 
             <div className="chart-card" style={{ marginTop: "1.25rem" }}>
-              <div className="chart-card-title">Leads by source</div>
-              <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                Which platform each enquiry came in through (Source_data in the sheet).
-              </p>
-              {stats.leadSource.length ? (
-                <BarChart data={stats.leadSource} />
+              <div className="chart-card-title">Top {stats.topProperties.length} most-enquired properties</div>
+              {stats.topProperties.length ? (
+                <HBarChart data={stats.topProperties} />
               ) : (
-                <p className="muted small">No source data yet.</p>
+                <p className="muted small">No property data yet.</p>
               )}
             </div>
 
@@ -305,7 +316,9 @@ export default function DashboardPage() {
               <div className="chart-card-title">Leads by property</div>
               <p className="muted small" style={{ marginBottom: "0.75rem" }}>
                 "Enquiries" = contact rows recorded in the sheet for that property (the sheet doesn't track page views/clicks
-                separately). Every distinct listing URL recorded for that property across its leads is linked below.
+                separately). Listings come from that property's entry in Property_master when there's a name match — the same
+                place your Propertyguru/99.co/SRX/EdgeProp links live — falling back to whatever link was recorded directly
+                on a lead if there's no match.
               </p>
               <input
                 className="table-search"
@@ -328,34 +341,61 @@ export default function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredPropertyRows.map((r) => (
-                      <tr key={r.property_name}>
-                        <td>{r.property_name}</td>
-                        <td>
-                          {r.links.length ? (
-                            r.links.map((url) => (
-                              <a
-                                key={url}
-                                href={url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{ display: "block" }}
-                              >
-                                {linkLabel(url)} ↗
-                              </a>
-                            ))
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                        <td>{r.total}</td>
-                        <td>{r.drop}</td>
-                        <td>{r.followUp}</td>
-                        <td>{r.pending}</td>
-                        <td>{r.check}</td>
-                      </tr>
-                    ))}
+                    {filteredPropertyRows.map((r) => {
+                      const compiled = parseCompiledLinks(propertyLinksByName[r.property_name.trim().toLowerCase()] || "");
+                      const rowLinks = compiled.length ? compiled : r.links.map((url) => ({ label: linkLabel(url), url }));
+                      return (
+                        <tr key={r.property_name}>
+                          <td>{r.property_name}</td>
+                          <td>
+                            {rowLinks.length ? (
+                              rowLinks.map((l) => (
+                                <div key={l.url} style={{ marginBottom: "0.4rem" }}>
+                                  <strong>{l.label}:</strong>
+                                  <br />
+                                  <a href={l.url} target="_blank" rel="noopener noreferrer">
+                                    {l.url}
+                                  </a>
+                                </div>
+                              ))
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td>{r.total}</td>
+                          <td>{r.drop}</td>
+                          <td>{r.followUp}</td>
+                          <td>{r.pending}</td>
+                          <td>{r.check}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
+                  {filteredPropertyRows.length > 0 && (
+                    <tfoot>
+                      <tr className="table-total-row">
+                        <td>
+                          <strong>Total ({filteredPropertyRows.length} properties)</strong>
+                        </td>
+                        <td></td>
+                        <td>
+                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.total, 0).toLocaleString()}</strong>
+                        </td>
+                        <td>
+                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.drop, 0).toLocaleString()}</strong>
+                        </td>
+                        <td>
+                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.followUp, 0).toLocaleString()}</strong>
+                        </td>
+                        <td>
+                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.pending, 0).toLocaleString()}</strong>
+                        </td>
+                        <td>
+                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.check, 0).toLocaleString()}</strong>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
               {filteredPropertyRows.length === 0 && <p className="muted small">No properties match.</p>}
@@ -562,7 +602,35 @@ function normalizeUrl(url) {
   if (!url) return "";
   const trimmed = url.trim();
   if (!trimmed) return "";
-  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  // Some rows have an address or area typed into the link column instead
+  // of a real URL ("188 Westwood Avenue, Boon Lay") — that has spaces or
+  // commas a URL never does, so reject it outright rather than turning it
+  // into a broken https:// link.
+  if (/[\s,]/.test(trimmed)) return "";
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const u = new URL(withProtocol);
+    if (!u.hostname.includes(".")) return "";
+    return withProtocol;
+  } catch (e) {
+    return "";
+  }
+}
+
+// Property_master's Property_link cell often has several platforms
+// compiled into one cell, e.g. "Propertyguru: https://…  99.co:
+// https://…  SRX: https://…  EdgeProp: https://…". Pulls each labeled
+// link out as its own {label, url} entry.
+function parseCompiledLinks(text) {
+  if (!text) return [];
+  const out = [];
+  const re = /([A-Za-z0-9][A-Za-z0-9 .]{0,20}?):\s*(https?:\/\/\S+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const url = normalizeUrl(m[2]);
+    if (url) out.push({ label: m[1].trim(), url });
+  }
+  return out;
 }
 
 // A short, human label for a listing URL, so multiple links on the same

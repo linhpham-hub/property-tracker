@@ -1137,6 +1137,14 @@ th {
   z-index: 1;
 }
 
+.table-total-row td {
+  background: var(--grey-bg);
+  border-top: 2px solid var(--brass-dark);
+  border-bottom: none;
+  position: sticky;
+  bottom: 0;
+}
+
 .table-search {
   max-width: 320px;
 }
