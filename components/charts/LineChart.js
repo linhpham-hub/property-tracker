@@ -106,7 +106,7 @@ export default function LineChart({ data, height = 220, valueFormat = (v) => v.t
               textAnchor={i === 0 ? "start" : i === data.length - 1 ? "end" : "middle"}
               className="chart-axis-label"
             >
-              {d.label}
+              {d.axisLabel || d.label}
             </text>
           );
         })}

@@ -70,15 +70,17 @@ export default function BarChart({ data, height = 220, valueFormat = (v) => v.to
                 style={{ transition: "fill 0.1s ease" }}
                 pointerEvents="none"
               />
-              <text
-                x={padding.left + i * slot + slot / 2}
-                y={y - 8}
-                textAnchor="middle"
-                className="chart-value-label"
-                pointerEvents="none"
-              >
-                {valueFormat(d.value)}
-              </text>
+              {d.value > 0 && (
+                <text
+                  x={padding.left + i * slot + slot / 2}
+                  y={y - 8}
+                  textAnchor="middle"
+                  className="chart-value-label"
+                  pointerEvents="none"
+                >
+                  {valueFormat(d.value)}
+                </text>
+              )}
               <text
                 x={padding.left + i * slot + slot / 2}
                 y={height - padding.bottom + 16}
@@ -86,7 +88,7 @@ export default function BarChart({ data, height = 220, valueFormat = (v) => v.to
                 className="chart-axis-label"
                 pointerEvents="none"
               >
-                {truncate(d.label, 14)}
+                {truncate(d.axisLabel || d.label, 14)}
               </text>
             </g>
           );
