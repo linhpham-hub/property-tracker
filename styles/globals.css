@@ -897,4 +897,160 @@ th {
   button {
     min-height: 42px;
   }
+
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Dashboard */
+
+.dashboard-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.last-synced {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-tile {
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+}
+
+.stat-tile-label {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  margin-bottom: 0.35rem;
+}
+
+.stat-tile-value {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--heading);
+  font-family: "Source Serif 4", Georgia, serif;
+}
+
+.stat-tile-delta {
+  font-size: 0.8rem;
+  margin-top: 0.3rem;
+  font-weight: 500;
+}
+
+.stat-tile-delta.stat-up {
+  color: var(--green);
+}
+
+.stat-tile-delta.stat-down {
+  color: var(--red);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+}
+
+.dashboard-grid.full {
+  grid-template-columns: 1fr;
+}
+
+.chart-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.1rem 1.1rem 0.75rem;
+}
+
+.chart-card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 0.6rem;
+}
+
+.chart-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-crosshair {
+  stroke: var(--brass-dark);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart-tick {
+  font-size: 9px;
+  fill: var(--ink-soft);
+}
+
+.chart-value-label {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+
+.chart-axis-label {
+  font-size: 9.5px;
+  fill: var(--ink-soft);
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--ink);
+  color: #fff;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(61, 21, 29, 0.25);
+}
+
+.chart-tooltip strong {
+  font-size: 0.9rem;
+}
+
+.chart-tooltip span {
+  color: #f0d7dc;
+}
+
+.reason-table td:last-child,
+.reason-table th:last-child {
+  text-align: right;
+  white-space: nowrap;
 }

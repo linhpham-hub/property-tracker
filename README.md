@@ -198,10 +198,44 @@ click the button — so editing them in the app is always safe.
 
 ---
 
+## Part 8 — Lead dashboard (optional)
+
+Visual overview of the **Data_raw** tab (leads/enquiries), separate from `Property_master`. Total
+leads, weekly volume trend, pipeline stage breakdown, property-type interest, lead channel, and
+top drop reasons.
+
+**This depends on the same Google Sheet as Part 7**, so it has the exact same requirement: the
+file must be a genuine Google Sheet, not an uploaded `.xlsx`. If you haven't done **File → Save as
+Google Sheets** yet (see Part 7's warning), do that first — otherwise the dashboard will either
+fail to load data or show stale/wrong numbers, the same way the old sync bug did.
+
+1. Run `supabase/migration_005_leads_table.sql` once in the Supabase SQL Editor — creates the
+   `leads` table.
+2. Everything from Part 7's setup (service account, sheet sharing, `GOOGLE_SHEET_ID`) is reused —
+   no new Google Cloud setup needed.
+3. Open **Dashboard** in the nav. Owners/editors see a **↻ Refresh data** button — click it to pull
+   the latest Data_raw rows on demand. Viewers can see the dashboard but not refresh it.
+4. **Daily auto-refresh (optional):** the app also ships a scheduled job (`vercel.json`, calling
+   `/api/leads/cron-sync` once a day at 22:00 UTC / 6am Singapore time) so the dashboard stays
+   current even if nobody clicks Refresh. To turn it on:
+   - In Supabase: **Project Settings → API → service_role key** (not the anon key) — copy it.
+   - Make up any long random string for `CRON_SECRET` (e.g. a password generator).
+   - Add both `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` to Vercel's environment variables and
+     redeploy. Vercel automatically calls the cron endpoint with `CRON_SECRET`, no extra wiring
+     needed.
+   - If you'd rather not set this up, the manual Refresh button works fine on its own — the cron
+     job simply won't run without these two variables, and nothing else breaks.
+   - Vercel's free (Hobby) plan allows cron jobs that run once a day, which is exactly what this
+     uses.
+5. Want a different refresh time? Edit the `schedule` in `vercel.json` (cron syntax, in UTC).
+
+---
+
 ## What each part of the app does
 
 - **Dashboard** (`/`) — searchable, filterable grid of every property.
   Search matches name/address/area; filter by type and status.
+- **Lead dashboard** (`/dashboard`) — charts and stats from Data_raw (Part 8).
 - **Property detail** (`/property/[id]`) — every field from your tracker,
   a running notes box (timestamped whenever saved), and separate photo and
   video galleries with upload/delete.
