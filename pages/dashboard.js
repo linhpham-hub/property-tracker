@@ -35,7 +35,9 @@ export default function DashboardPage() {
   const [yearFilter, setYearFilter] = useState(saved.yearFilter || "all");
   const [monthFilter, setMonthFilter] = useState(saved.monthFilter || "all");
   const [dayFilter, setDayFilter] = useState(saved.dayFilter || "all");
-  const [enquirerFilter, setEnquirerFilter] = useState(saved.enquirerFilter || "all");
+  const [enquirerFilter, setEnquirerFilter] = useState(
+    LEAD_TYPES.includes(saved.enquirerFilter) ? saved.enquirerFilter : "all"
+  );
   const [propertySearch, setPropertySearch] = useState(saved.propertySearch || "");
 
   useEffect(() => {
@@ -153,10 +155,7 @@ export default function DashboardPage() {
 
   const now = useMemo(() => new Date(), [leads]); // recompute "today" each time data reloads
   const availableYears = useMemo(() => getAvailableYears(leads), [leads]);
-  const enquirerOptions = useMemo(() => {
-    const set = new Set(leads.map((l) => (l.enquirer_type || "").trim() || "(blank)"));
-    return Array.from(set).sort();
-  }, [leads]);
+  const enquirerOptions = LEAD_TYPES;
   const daysInMonth =
     yearFilter !== "all" && monthFilter !== "all" ? new Date(Number(yearFilter), Number(monthFilter) + 1, 0).getDate() : 0;
 
@@ -164,7 +163,7 @@ export default function DashboardPage() {
   const nonDateFiltered = useMemo(() => {
     const q = propertySearch.trim().toLowerCase();
     return leads.filter((l) => {
-      if (enquirerFilter !== "all" && ((l.enquirer_type || "").trim() || "(blank)") !== enquirerFilter) return false;
+      if (enquirerFilter !== "all" && leadType(l) !== enquirerFilter) return false;
       if (q && !(l.property_name || "").toLowerCase().includes(q)) return false;
       return true;
     });
@@ -274,7 +273,7 @@ export default function DashboardPage() {
                   </option>
                 ))}
               </select>
-              <span className="muted small">Enquirer:</span>
+              <span className="muted small">Who:</span>
               <select value={enquirerFilter} onChange={(e) => setEnquirerFilter(e.target.value)}>
                 <option value="all">All</option>
                 {enquirerOptions.map((o) => (
@@ -403,21 +402,26 @@ export default function DashboardPage() {
 
               <div className="chart-card">
                 <div className="chart-card-title">
-                  Raw reason text ({stats.dropReasonsRaw.length}) — what rolled into each bucket above
+                  Reasons ({stats.dropReasonsRaw.length}) — what rolled into each bucket above
                 </div>
                 {stats.dropReasonsRaw.length ? (
                   <div className="table-wrap table-scroll">
                     <table className="reason-table">
                       <thead>
                         <tr>
-                          <th>Reason (as written in the sheet)</th>
+                          <th>Reason (spelling variants merged)</th>
                           <th>Count</th>
                         </tr>
                       </thead>
                       <tbody>
                         {stats.dropReasonsRaw.map((r) => (
                           <tr key={r.label}>
-                            <td>{r.label}</td>
+                            <td>
+                              {r.label}
+                              {r.variants.length > 1 && (
+                                <div className="muted small">Written as: {r.variants.map((v) => `“${v}”`).join(", ")}</div>
+                              )}
+                            </td>
                             <td>{r.value.toLocaleString()}</td>
                           </tr>
                         ))}
@@ -426,6 +430,53 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   <p className="muted small">No reason data yet.</p>
+                )}
+              </div>
+
+              <div className="chart-card">
+                <div className="chart-card-title">Agent vs customer</div>
+                {stats.leadTypes.length ? (
+                  <DonutChart data={stats.leadTypes} />
+                ) : (
+                  <p className="muted small">No leads in this range.</p>
+                )}
+                <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                  Agent = Enquirer Type "Agent", or "Agent" written in the Reason column. Customer = Enquirer Type
+                  "Consumer". Not specified = neither (mostly 99.co, which has no Enquirer Type).
+                </p>
+              </div>
+
+              <div className="chart-card">
+                <div className="chart-card-title">Agent vs customer, by platform</div>
+                {stats.leadTypeBySource.length ? (
+                  <div className="table-wrap">
+                    <table className="reason-table">
+                      <thead>
+                        <tr>
+                          <th>Platform</th>
+                          <th>Agent</th>
+                          <th>Customer</th>
+                          <th>Not specified</th>
+                          <th>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stats.leadTypeBySource.map((r) => (
+                          <tr key={r.source}>
+                            <td>{r.source}</td>
+                            <td>{r.Agent.toLocaleString()}</td>
+                            <td>{r.Customer.toLocaleString()}</td>
+                            <td>{r["Not specified"].toLocaleString()}</td>
+                            <td>
+                              <strong>{r.total.toLocaleString()}</strong>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="muted small">No leads in this range.</p>
                 )}
               </div>
             </div>
@@ -605,7 +656,7 @@ export default function DashboardPage() {
                           <th>Customer</th>
                           <th>Mobile</th>
                           <th>Source</th>
-                          <th>Enquirer</th>
+                          <th>Who</th>
                           <th>Status</th>
                           <th>Reason</th>
                         </tr>
@@ -618,7 +669,7 @@ export default function DashboardPage() {
                             <td>{l.full_name && l.full_name !== "-" ? l.full_name : l.first_name || "—"}</td>
                             <td>{l.mobile || "—"}</td>
                             <td>{l.source_data || "—"}</td>
-                            <td>{l.enquirer_type || "—"}</td>
+                            <td>{leadType(l)}</td>
                             <td>{l.customer_status || "(blank)"}</td>
                             <td>{l.customer_status_reason || "—"}</td>
                           </tr>
@@ -735,25 +786,64 @@ function computeFollowUps(leads, refDate) {
 
 // ---------- drop/close reason taxonomy (my grouping of the 56 raw values) ----------
 
+// Applied to the normalized reason text (see normalizeReason), so spelling
+// and capitalisation variants all land in the same bucket.
 const REASON_RULES = [
-  { test: /expired/i, label: "Property expired" },
-  { test: /no whatsapp/i, label: "No WhatsApp contact" },
-  { test: /no property name/i, label: "Missing property info" },
-  { test: /no match/i, label: "No matching property" },
-  { test: /agent/i, label: "Agent lead (no follow-up needed)" },
-  { test: /wait.*reply|customer no reply|no reply/i, label: "Awaiting customer reply" },
-  { test: /let javier follow|scheduled/i, label: "Handed to Javier" },
-  { test: /not last_update/i, label: "Tracking not updated" },
-  { test: /viewed/i, label: "Unit viewed" },
-  { test: /no need property/i, label: "No longer needs property" },
+  { test: /expired/, label: "Property expired" },
+  { test: /no whatsapp|whatsapp error|blocked/, label: "No WhatsApp contact" },
+  { test: /no property name/, label: "Missing property info" },
+  { test: /no match/, label: "No matching property" },
+  { test: /\bagent\b/, label: "Agent lead (no follow-up needed)" },
+  { test: /wait.*reply|no reply/, label: "Awaiting customer reply" },
+  { test: /javier|schedul/, label: "Handed to Javier" },
+  { test: /not last update|not last property/, label: "Tracking not updated" },
+  { test: /viewed/, label: "Unit viewed" },
+  { test: /no need/, label: "No longer needs property" },
 ];
 
 function categorizeReason(raw) {
   if (!raw) return null;
+  const n = normalizeReason(raw);
+  if (!n) return null;
   for (const rule of REASON_RULES) {
-    if (rule.test.test(raw)) return rule.label;
+    if (rule.test.test(n)) return rule.label;
   }
   return "Other";
+}
+
+// One canonical form per reason, so "no whatsapp" / "No whatsapp" /
+// "Nowhatsapp", "Not last_update" / "Not last update", "Agent," / "Agent",
+// "Viewrd" / "Viewed", "Javier follow?" / "Javier follow" are counted as one.
+function normalizeReason(raw) {
+  if (!raw) return "";
+  let s = String(raw).toLowerCase().replace(/_/g, " ").replace(/\?/g, "");
+  s = s.replace(/no\s*whats\s*app/g, "no whatsapp");
+  s = s.replace(/\bviewrd\b/g, "viewed");
+  s = s.replace(/\bno match property\b/g, "no match");
+  s = s.replace(/\bnot last update\b/g, "not last update");
+  return s
+    .split(",")
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+// How a normalized reason is shown: first letter capitalised, proper nouns fixed.
+function displayReason(n) {
+  const s = n.replace(/\bjavier\b/g, "Javier").replace(/\bwhatsapp\b/g, "WhatsApp").replace(/\bsg\b/g, "SG");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Agent vs customer. Agent if the sheet's Enquirer Type says Agent, or if
+// "Agent" was written in the Reason column (how agents were noted before
+// Enquirer Type was filled in). Customer if Enquirer Type says Consumer.
+// Otherwise not specified (mostly 99.co, which has no Enquirer Type).
+const LEAD_TYPES = ["Agent", "Customer", "Not specified"];
+function leadType(l) {
+  const et = (l.enquirer_type || "").trim().toLowerCase();
+  if (et === "agent" || /\bagent\b/.test(normalizeReason(l.customer_status_reason))) return "Agent";
+  if (et === "consumer" || et === "customer") return "Customer";
+  return "Not specified";
 }
 
 // ---------- main aggregation ----------
@@ -805,14 +895,20 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
   // that actually have a reason recorded (mostly Drop-status leads) — most
   // leads never get one (they're still active), so including blanks here
   // would just bury the real reasons under one giant "no reason yet" bar.
-  const reasonCounts = countBy(
-    filteredLeads.filter((l) => (l.customer_status_reason || "").trim()),
-    "customer_status_reason"
-  );
+  // Counted by normalized text, so spelling/capitalisation variants merge;
+  // each row also keeps the different ways it was actually written.
+  const reasonCounts = {};
+  const reasonVariants = {};
+  for (const l of filteredLeads) {
+    const n = normalizeReason(l.customer_status_reason);
+    if (!n) continue;
+    reasonCounts[n] = (reasonCounts[n] || 0) + 1;
+    (reasonVariants[n] = reasonVariants[n] || new Set()).add(String(l.customer_status_reason).trim());
+  }
   const groupedCounts = {};
   let groupedTotal = 0;
-  for (const [raw, count] of Object.entries(reasonCounts)) {
-    const bucket = categorizeReason(raw);
+  for (const [n, count] of Object.entries(reasonCounts)) {
+    const bucket = categorizeReason(n);
     if (!bucket) continue;
     groupedCounts[bucket] = (groupedCounts[bucket] || 0) + count;
     groupedTotal += count;
@@ -820,7 +916,23 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
   const dropReasonsGrouped = Object.entries(groupedCounts)
     .map(([label, value]) => ({ label, value, pct: groupedTotal ? Math.round((value / groupedTotal) * 100) : 0 }))
     .sort((a, b) => b.value - a.value);
-  const dropReasonsRaw = toChartData(reasonCounts).sort((a, b) => b.value - a.value);
+  const dropReasonsRaw = Object.entries(reasonCounts)
+    .map(([n, value]) => ({ label: displayReason(n), value, variants: Array.from(reasonVariants[n]) }))
+    .sort((a, b) => b.value - a.value);
+
+  // Agent vs customer, plus the same split per platform.
+  const leadTypeCounts = {};
+  const typeBySource = {};
+  for (const l of filteredLeads) {
+    const t = leadType(l);
+    leadTypeCounts[t] = (leadTypeCounts[t] || 0) + 1;
+    const src = (l.source_data || "").trim() || "(blank)";
+    typeBySource[src] = typeBySource[src] || { source: src, Agent: 0, Customer: 0, "Not specified": 0, total: 0 };
+    typeBySource[src][t]++;
+    typeBySource[src].total++;
+  }
+  const leadTypes = LEAD_TYPES.filter((t) => leadTypeCounts[t]).map((t) => ({ label: t, value: leadTypeCounts[t] }));
+  const leadTypeBySource = Object.values(typeBySource).sort((a, b) => b.total - a.total);
 
   const propertyTable = computePropertyTable(filteredLeads);
   const repeatCustomers = computeRepeatCustomers(filteredLeads);
@@ -843,6 +955,8 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
     repeatCustomers,
     dailyTrend,
     dailyStats,
+    leadTypes,
+    leadTypeBySource,
   };
 }
 
