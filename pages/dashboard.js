@@ -829,8 +829,11 @@ function addDays(d, n) {
   return r;
 }
 
+// Local calendar date as YYYY-MM-DD. (toISOString() converts to UTC first,
+// and midnight 1 Oct in Singapore is still 30 Sep in UTC — that shifted
+// every day on the chart one day early.)
 function dayKey(d) {
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // Picks the date span to plot: the selected month in full (clipped at
