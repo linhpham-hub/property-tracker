@@ -122,7 +122,10 @@ export default function DashboardPage() {
         setSyncMessage(`Refresh failed: ${result.error}`);
       } else {
         setSyncMessage(
-          `Synced ${result.synced} lead${result.synced === 1 ? "" : "s"}${result.skipped ? ` (${result.skipped} skipped — no row number)` : ""}.`
+          `Synced ${result.synced} lead${result.synced === 1 ? "" : "s"}${result.skipped ? ` (${result.skipped} skipped — no row number)` : ""}.` +
+            (result.repeatedNos && result.repeatedNos.length
+              ? ` Note: No. ${result.repeatedNos.slice(0, 10).join(", ")}${result.repeatedNos.length > 10 ? "…" : ""} appear${result.repeatedNos.length === 1 ? "s" : ""} more than once in Data_raw — both leads were kept, but please renumber them in the sheet.`
+              : "")
         );
         await loadLeads();
       }
