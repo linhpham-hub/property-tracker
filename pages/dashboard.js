@@ -34,12 +34,24 @@ export default function DashboardPage() {
   const saved = useMemo(loadSavedState, []);
   const [yearFilter, setYearFilter] = useState(saved.yearFilter || "all");
   const [monthFilter, setMonthFilter] = useState(saved.monthFilter || "all");
-  const [propertySearch, setPropertySearch] = useState("");
+  const [dayFilter, setDayFilter] = useState(saved.dayFilter || "all");
+  const [enquirerFilter, setEnquirerFilter] = useState(saved.enquirerFilter || "all");
+  const [propertySearch, setPropertySearch] = useState(saved.propertySearch || "");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ yearFilter, monthFilter }));
-  }, [yearFilter, monthFilter]);
+    try {
+      sessionStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch })
+      );
+    } catch (e) {}
+  }, [yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch]);
+
+  // A day only means something inside one specific month.
+  useEffect(() => {
+    if ((yearFilter === "all" || monthFilter === "all") && dayFilter !== "all") setDayFilter("all");
+  }, [yearFilter, monthFilter, dayFilter]);
 
   const canEdit = profile?.role === "owner" || profile?.role === "editor";
 
@@ -77,7 +89,7 @@ export default function DashboardPage() {
   }
 
   async function loadProperties() {
-    const { data } = await supabase.from("properties").select("id, property_name, property_link");
+    const { data } = await supabase.from("properties").select("id, property_name, property_link, property_status");
     setProperties(data || []);
   }
 
@@ -121,11 +133,15 @@ export default function DashboardPage() {
       if (!res.ok) {
         setSyncMessage(`Refresh failed: ${result.error}`);
       } else {
+        const notes = [];
+        if (result.blankNo) notes.push(`${result.blankNo} with a blank No.`);
+        if (result.repeatedNos && result.repeatedNos.length)
+          notes.push(
+            `No. ${result.repeatedNos.slice(0, 10).join(", ")}${result.repeatedNos.length > 10 ? "…" : ""} used more than once`
+          );
         setSyncMessage(
-          `Synced ${result.synced} lead${result.synced === 1 ? "" : "s"}${result.skipped ? ` (${result.skipped} skipped — no row number)` : ""}.` +
-            (result.repeatedNos && result.repeatedNos.length
-              ? ` Note: No. ${result.repeatedNos.slice(0, 10).join(", ")}${result.repeatedNos.length > 10 ? "…" : ""} appear${result.repeatedNos.length === 1 ? "s" : ""} more than once in Data_raw — both leads were kept, but please renumber them in the sheet.`
-              : "")
+          `Synced ${result.synced} lead${result.synced === 1 ? "" : "s"}.` +
+            (notes.length ? ` All were included; to tidy Data_raw: ${notes.join("; ")}.` : "")
         );
         await loadLeads();
       }
@@ -137,27 +153,63 @@ export default function DashboardPage() {
 
   const now = useMemo(() => new Date(), [leads]); // recompute "today" each time data reloads
   const availableYears = useMemo(() => getAvailableYears(leads), [leads]);
-  const filteredLeads = useMemo(() => filterByYearMonth(leads, yearFilter, monthFilter), [leads, yearFilter, monthFilter]);
+  const enquirerOptions = useMemo(() => {
+    const set = new Set(leads.map((l) => (l.enquirer_type || "").trim() || "(blank)"));
+    return Array.from(set).sort();
+  }, [leads]);
+  const daysInMonth =
+    yearFilter !== "all" && monthFilter !== "all" ? new Date(Number(yearFilter), Number(monthFilter) + 1, 0).getDate() : 0;
+
+  // Everything except the date: enquirer type + property search.
+  const nonDateFiltered = useMemo(() => {
+    const q = propertySearch.trim().toLowerCase();
+    return leads.filter((l) => {
+      if (enquirerFilter !== "all" && ((l.enquirer_type || "").trim() || "(blank)") !== enquirerFilter) return false;
+      if (q && !(l.property_name || "").toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [leads, enquirerFilter, propertySearch]);
+  // Leads per day always plots the whole month (so picking one day doesn't
+  // collapse it to a single dot) — everything else narrows to the day.
+  const monthScopedLeads = useMemo(
+    () => filterByYearMonth(nonDateFiltered, yearFilter, monthFilter),
+    [nonDateFiltered, yearFilter, monthFilter]
+  );
+  const filteredLeads = useMemo(
+    () => (dayFilter === "all" ? monthScopedLeads : monthScopedLeads.filter((l) => l.enquiry_date && Number(l.enquiry_date.slice(8, 10)) === Number(dayFilter))),
+    [monthScopedLeads, dayFilter]
+  );
   const undatedExcluded = useMemo(
-    () => (yearFilter !== "all" || monthFilter !== "all" ? leads.filter((l) => !l.enquiry_date).length : 0),
-    [leads, yearFilter, monthFilter]
+    () => (yearFilter !== "all" || monthFilter !== "all" ? nonDateFiltered.filter((l) => !l.enquiry_date).length : 0),
+    [nonDateFiltered, yearFilter, monthFilter]
   );
 
   const stats = useMemo(
-    () => computeStats(leads, filteredLeads, yearFilter, monthFilter, now),
-    [leads, filteredLeads, yearFilter, monthFilter, now]
+    () => computeStats(leads, filteredLeads, yearFilter, monthFilter, now, monthScopedLeads),
+    [leads, filteredLeads, yearFilter, monthFilter, now, monthScopedLeads]
   );
+
+  // Active listings in Property_master, ranked by how few enquiries they
+  // got in the selected period — the ones Javier's listing work isn't
+  // reaching. "Low" = under half the typical (median) active listing.
+  const attention = useMemo(
+    () => computeAttention(properties, filteredLeads, leads, propertyLinksByName, propertySearch),
+    [properties, filteredLeads, leads, propertyLinksByName, propertySearch]
+  );
+
+  const leadList = useMemo(
+    () =>
+      [...filteredLeads].sort((a, b) => (b.enquiry_date || "").localeCompare(a.enquiry_date || "") || (b.row_no || 0) - (a.row_no || 0)),
+    [filteredLeads]
+  );
+  const showLeadList = dayFilter !== "all" || propertySearch.trim() !== "" || enquirerFilter !== "all" || monthFilter !== "all";
   const lastSynced = useMemo(() => {
     const dates = leads.map((l) => l.synced_at).filter(Boolean);
     if (!dates.length) return null;
     return new Date(Math.max(...dates.map((d) => new Date(d).getTime())));
   }, [leads]);
 
-  const filteredPropertyRows = useMemo(() => {
-    if (!propertySearch.trim()) return stats.propertyTable;
-    const q = propertySearch.trim().toLowerCase();
-    return stats.propertyTable.filter((r) => r.property_name.toLowerCase().includes(q));
-  }, [stats.propertyTable, propertySearch]);
+  const filteredPropertyRows = stats.propertyTable;
 
   if (loading || !profile) return <div className="loading-screen">Loading…</div>;
 
@@ -208,6 +260,48 @@ export default function DashboardPage() {
                   </option>
                 ))}
               </select>
+              <span className="muted small">Day:</span>
+              <select
+                value={dayFilter}
+                onChange={(e) => setDayFilter(e.target.value)}
+                disabled={!daysInMonth}
+                title={daysInMonth ? "" : "Pick a year and a month first"}
+              >
+                <option value="all">All days</option>
+                {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+              <span className="muted small">Enquirer:</span>
+              <select value={enquirerFilter} onChange={(e) => setEnquirerFilter(e.target.value)}>
+                <option value="all">All</option>
+                {enquirerOptions.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="table-search"
+                placeholder="Search property…"
+                value={propertySearch}
+                onChange={(e) => setPropertySearch(e.target.value)}
+              />
+              {(dayFilter !== "all" || enquirerFilter !== "all" || propertySearch) && (
+                <button
+                  type="button"
+                  className="link-button small"
+                  onClick={() => {
+                    setDayFilter("all");
+                    setEnquirerFilter("all");
+                    setPropertySearch("");
+                  }}
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
             {undatedExcluded > 0 && (
               <p className="muted small" style={{ marginTop: "-0.5rem", marginBottom: "1rem" }}>
@@ -228,11 +322,46 @@ export default function DashboardPage() {
 
             <div className="dashboard-grid">
               <div className="chart-card">
-                <div className="chart-card-title">Leads per day</div>
+                <div className="chart-card-title">
+                  {stats.dailyTrend.some((d) => d.weekly) ? "Leads per week" : "Leads per day"}
+                  {dayFilter !== "all" && <span className="muted small"> — whole month shown, day {dayFilter} marked</span>}
+                </div>
                 {stats.dailyTrend.length > 1 ? (
-                  <LineChart data={stats.dailyTrend} />
+                  <LineChart
+                    data={stats.dailyTrend}
+                    refValue={stats.dailyStats ? stats.dailyStats.average : null}
+                    refLabel={stats.dailyStats ? `avg ${stats.dailyStats.average.toFixed(1)}` : ""}
+                    highlightIndex={dayFilter !== "all" ? Number(dayFilter) - 1 : null}
+                  />
                 ) : (
                   <p className="muted small">Not enough dated leads yet to chart this.</p>
+                )}
+                {stats.dailyStats && (
+                  <div className="daily-stats">
+                    <div>
+                      <span className="daily-stats-label">Average / day</span>
+                      <span className="daily-stats-value">{stats.dailyStats.average.toFixed(1)}</span>
+                    </div>
+                    <div>
+                      <span className="daily-stats-label">Median</span>
+                      <span className="daily-stats-value">{Number.isInteger(stats.dailyStats.median) ? stats.dailyStats.median : stats.dailyStats.median.toFixed(1)}</span>
+                    </div>
+                    <div>
+                      <span className="daily-stats-label">Busiest</span>
+                      <span className="daily-stats-value">{stats.dailyStats.max}</span>
+                      <span className="daily-stats-sub">{stats.dailyStats.busiestLabel}</span>
+                    </div>
+                    <div>
+                      <span className="daily-stats-label">Quietest</span>
+                      <span className="daily-stats-value">{stats.dailyStats.min}</span>
+                      <span className="daily-stats-sub">{stats.dailyStats.quietestLabel}</span>
+                    </div>
+                    <div>
+                      <span className="daily-stats-label">Days with 0</span>
+                      <span className="daily-stats-value">{stats.dailyStats.zeroDays}</span>
+                      <span className="daily-stats-sub">of {stats.dailyStats.days}</span>
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -326,20 +455,64 @@ export default function DashboardPage() {
             </div>
 
             <div className="chart-card" style={{ marginTop: "1.25rem" }}>
+              <div className="chart-card-title">Listings needing attention ({attention.rows.length})</div>
+              <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                Active listings in Property_master with no enquiries, or fewer than half of what a typical active listing got
+                ({attention.median % 1 ? attention.median.toFixed(1) : attention.median} enquiries) in the selected period.
+                {" "}{attention.activeCount} active listings checked.
+              </p>
+              {attention.rows.length ? (
+                <div className="table-wrap table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Property</th>
+                        <th>Enquiries</th>
+                        <th>Flag</th>
+                        <th>Last enquiry (any time)</th>
+                        <th>Listings</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attention.rows.map((r) => (
+                        <tr key={r.id}>
+                          <td>
+                            <a href={`/property/${r.id}`} target="_blank" rel="noopener noreferrer">
+                              {r.name}
+                            </a>
+                          </td>
+                          <td>{r.count}</td>
+                          <td>
+                            <span className={`flag-chip ${r.count === 0 ? "flag-none" : "flag-low"}`}>{r.flag}</span>
+                          </td>
+                          <td>{r.lastEnquiry ? formatDate(r.lastEnquiry) : "Never"}</td>
+                          <td>
+                            {r.links.length
+                              ? r.links.map((l) => (
+                                  <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" className="inline-link">
+                                    {l.label} ↗
+                                  </a>
+                                ))
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="muted small">Every active listing is getting a normal share of enquiries in this period.</p>
+              )}
+            </div>
+
+            <div className="chart-card" style={{ marginTop: "1.25rem" }}>
               <div className="chart-card-title">Leads by property</div>
               <p className="muted small" style={{ marginBottom: "0.75rem" }}>
                 "Enquiries" = contact rows recorded in the sheet for that property (the sheet doesn't track page views/clicks
                 separately). Listings come from that property's entry in Property_master when there's a name match — the same
                 place your Propertyguru/99.co/SRX/EdgeProp links live — falling back to whatever link was recorded directly
-                on a lead if there's no match.
+                on a lead if there's no match. Use the property search at the top to narrow this table.
               </p>
-              <input
-                className="table-search"
-                placeholder="Search property…"
-                value={propertySearch}
-                onChange={(e) => setPropertySearch(e.target.value)}
-                style={{ marginBottom: "0.75rem" }}
-              />
               <div className="table-wrap table-scroll">
                 <table>
                   <thead>
@@ -415,6 +588,54 @@ export default function DashboardPage() {
               </div>
               {filteredPropertyRows.length === 0 && <p className="muted small">No properties match.</p>}
             </div>
+
+            {showLeadList && (
+              <div className="chart-card" style={{ marginTop: "1.25rem" }}>
+                <div className="chart-card-title">Lead list ({leadList.length})</div>
+                <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                  Every lead matching the filters above, newest first — pick a day, a property or an enquirer type to deep-dive.
+                </p>
+                {leadList.length ? (
+                  <div className="table-wrap table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Property</th>
+                          <th>Customer</th>
+                          <th>Mobile</th>
+                          <th>Source</th>
+                          <th>Enquirer</th>
+                          <th>Status</th>
+                          <th>Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {leadList.slice(0, 500).map((l) => (
+                          <tr key={l.id}>
+                            <td style={{ whiteSpace: "nowrap" }}>{l.enquiry_date ? formatDate(l.enquiry_date) : "—"}</td>
+                            <td>{l.property_name || "—"}</td>
+                            <td>{l.full_name && l.full_name !== "-" ? l.full_name : l.first_name || "—"}</td>
+                            <td>{l.mobile || "—"}</td>
+                            <td>{l.source_data || "—"}</td>
+                            <td>{l.enquirer_type || "—"}</td>
+                            <td>{l.customer_status || "(blank)"}</td>
+                            <td>{l.customer_status_reason || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="muted small">No leads match these filters.</p>
+                )}
+                {leadList.length > 500 && (
+                  <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                    Showing the newest 500 of {leadList.length.toLocaleString()} — narrow the filters to see the rest.
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="chart-card" style={{ marginTop: "1.25rem" }}>
               <div className="chart-card-title">Repeat customers ({stats.repeatCustomers.length})</div>
@@ -537,7 +758,7 @@ function categorizeReason(raw) {
 
 // ---------- main aggregation ----------
 
-function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now) {
+function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, chartLeads = filteredLeads) {
   const total = filteredLeads.length;
 
   const statusCounts = countBy(filteredLeads, "customer_status");
@@ -603,7 +824,8 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now) {
 
   const propertyTable = computePropertyTable(filteredLeads);
   const repeatCustomers = computeRepeatCustomers(filteredLeads);
-  const dailyTrend = dailySeries(filteredLeads, yearFilter, monthFilter, now);
+  const dailyTrend = dailySeries(chartLeads, yearFilter, monthFilter, now);
+  const dailyStats = summarizeDaily(dailyTrend);
 
   return {
     total,
@@ -620,6 +842,80 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now) {
     propertyTable,
     repeatCustomers,
     dailyTrend,
+    dailyStats,
+  };
+}
+
+// "2026-10-01" → "1 Oct 2026" (built from the parts, so no time-zone shift).
+function formatDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} ${MONTH_NAMES[m - 1]} ${y}`;
+}
+
+// Active listings (Property_master status "Active") that got no or few
+// enquiries in the selected period. "Low" = under half the median of all
+// active listings in the same period — relative, so it adapts to busy
+// and quiet months instead of using a fixed cut-off.
+function computeAttention(properties, filteredLeads, allLeads, linksByName, search) {
+  const q = (search || "").trim().toLowerCase();
+  const active = properties.filter(
+    (p) => p.property_name && statusKey(p.property_status) === "active" && (!q || p.property_name.toLowerCase().includes(q))
+  );
+  const counts = {};
+  for (const l of filteredLeads) {
+    const k = (l.property_name || "").trim().toLowerCase();
+    if (k) counts[k] = (counts[k] || 0) + 1;
+  }
+  const lastEnquiry = {};
+  for (const l of allLeads) {
+    const k = (l.property_name || "").trim().toLowerCase();
+    if (k && l.enquiry_date && (!lastEnquiry[k] || l.enquiry_date > lastEnquiry[k])) lastEnquiry[k] = l.enquiry_date;
+  }
+  const rows = active.map((p) => {
+    const k = p.property_name.trim().toLowerCase();
+    return {
+      id: p.id,
+      name: p.property_name.trim(),
+      count: counts[k] || 0,
+      lastEnquiry: lastEnquiry[k] || null,
+      links: sortLinksByPriority(parseCompiledLinks(linksByName[k] || "")),
+    };
+  });
+  const sortedCounts = rows.map((r) => r.count).sort((a, b) => a - b);
+  const n = sortedCounts.length;
+  const median = n ? (n % 2 ? sortedCounts[(n - 1) / 2] : (sortedCounts[n / 2 - 1] + sortedCounts[n / 2]) / 2) : 0;
+  const lowCutoff = median / 2;
+  const flagged = rows
+    .map((r) => ({ ...r, flag: r.count === 0 ? "No enquiries" : r.count < lowCutoff ? "Low" : null }))
+    .filter((r) => r.flag)
+    .sort((a, b) => a.count - b.count || (a.lastEnquiry || "").localeCompare(b.lastEnquiry || ""));
+  return { rows: flagged, activeCount: n, median };
+}
+
+// Average / median / min / max leads per day across the days plotted
+// (days with no leads count as 0 — they're real quiet days, not missing).
+// Weekly buckets (very long ranges) aren't days, so no stats for those.
+function summarizeDaily(series) {
+  if (!series.length || series.some((d) => d.weekly)) return null;
+  const vals = series.map((d) => d.value);
+  const sorted = [...vals].sort((a, b) => a - b);
+  const n = sorted.length;
+  const sum = vals.reduce((s, v) => s + v, 0);
+  const median = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  const max = sorted[n - 1];
+  const min = sorted[0];
+  const busiest = series.find((d) => d.value === max);
+  const quietest = series.find((d) => d.value === min);
+  return {
+    days: n,
+    total: sum,
+    average: sum / n,
+    median,
+    min,
+    max,
+    busiestLabel: busiest ? busiest.label : "",
+    quietestLabel: quietest ? quietest.label : "",
+    zeroDays: vals.filter((v) => v === 0).length,
   };
 }
 
@@ -914,5 +1210,6 @@ function weeklyFallback(dated) {
   return keys.map((key) => ({
     label: new Date(key + "T00:00:00").toLocaleDateString("en-SG", { month: "short", day: "numeric" }),
     value: buckets[key],
+    weekly: true,
   }));
 }

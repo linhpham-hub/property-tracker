@@ -3,7 +3,14 @@ import { useState, useRef } from "react";
 // Single-series trend line. Spec: 2px line, round join/cap, area wash at
 // ~10% opacity, crosshair that snaps to the nearest point, one tooltip
 // listing the value + date. One series → no legend (title says what it is).
-export default function LineChart({ data, height = 220, valueFormat = (v) => v.toLocaleString() }) {
+export default function LineChart({
+  data,
+  height = 220,
+  valueFormat = (v) => v.toLocaleString(),
+  refValue = null, // optional dashed reference line, e.g. the daily average
+  refLabel = "",
+  highlightIndex = null, // optional persistent marker, e.g. the filtered day
+}) {
   const [hoverIdx, setHoverIdx] = useState(null);
   const svgRef = useRef(null);
   const padding = { top: 28, right: 16, bottom: 34, left: 12 };
@@ -11,7 +18,7 @@ export default function LineChart({ data, height = 220, valueFormat = (v) => v.t
   const innerW = width - padding.left - padding.right;
   const innerH = height - padding.top - padding.bottom;
 
-  const max = Math.max(1, ...data.map((d) => d.value));
+  const max = Math.max(1, ...data.map((d) => d.value), refValue || 0);
   const niceMax = niceCeiling(max);
 
   const stepX = data.length > 1 ? innerW / (data.length - 1) : 0;
@@ -65,6 +72,31 @@ export default function LineChart({ data, height = 220, valueFormat = (v) => v.t
         ))}
 
         <path d={areaPath} fill="var(--navy)" opacity="0.1" stroke="none" />
+
+        {refValue != null && (
+          <g pointerEvents="none">
+            <line
+              x1={padding.left}
+              x2={width - padding.right}
+              y1={yFor(refValue)}
+              y2={yFor(refValue)}
+              stroke="var(--ink-soft)"
+              strokeWidth="1"
+              strokeDasharray="4 4"
+            />
+            <text
+              x={width - padding.right}
+              y={yFor(refValue) - 5}
+              textAnchor="end"
+              className="chart-tick"
+              stroke="var(--paper-raised)"
+              strokeWidth="3"
+              paintOrder="stroke"
+            >
+              {refLabel}
+            </text>
+          </g>
+        )}
         <path d={linePath} fill="none" stroke="var(--navy)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
 
         {hoverIdx !== null && (
@@ -80,7 +112,8 @@ export default function LineChart({ data, height = 220, valueFormat = (v) => v.t
         {data.map((d, i) => {
           const isEnd = i === data.length - 1;
           const isHover = hoverIdx === i;
-          if (!isEnd && !isHover) return null;
+          const isHighlight = highlightIndex === i;
+          if (!isEnd && !isHover && !isHighlight) return null;
           return (
             <circle
               key={i}
@@ -96,7 +129,7 @@ export default function LineChart({ data, height = 220, valueFormat = (v) => v.t
 
         {/* sparse x labels: first, last, and hovered */}
         {data.map((d, i) => {
-          const show = i === 0 || i === data.length - 1 || i === hoverIdx;
+          const show = i === 0 || i === data.length - 1 || i === hoverIdx || i === highlightIndex;
           if (!show) return null;
           return (
             <text
