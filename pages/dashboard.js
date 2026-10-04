@@ -49,6 +49,7 @@ export default function DashboardPage() {
     LEAD_TYPES.includes(saved.enquirerFilter) ? saved.enquirerFilter : "all"
   );
   const [propertySearch, setPropertySearch] = useState(saved.propertySearch || "");
+  const [closedReasonGroups, setClosedReasonGroups] = useState({});
   const [activeTab, setActiveTab] = useState(
     DASHBOARD_TABS.some((t) => t.key === saved.activeTab) ? saved.activeTab : "overview"
   );
@@ -461,9 +462,16 @@ export default function DashboardPage() {
                       <p className="muted small">No leads in this range.</p>
                     )}
                     <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                      In pipeline order; every lead is in exactly one stage. Scheduled / Viewed / Let Javier follow come from your
-                      Reason note (scheduling wins, e.g. "Scheduled, let Javier follow" = Scheduled); the rest from Status.
+                      In pipeline order; every lead is in exactly one stage. Scheduled / Viewed come from your
+                      Reason note (scheduling wins, e.g. "Scheduled, let Javier follow" = Scheduled); a "let Javier follow" note
+                      counts as Pending; the rest from Status.
                     </p>
+                    {stats.pipeline.pendingBreakdown.length > 0 && (
+                      <p className="small" style={{ marginTop: "0.4rem" }}>
+                        <strong>Pending:</strong>{" "}
+                        {stats.pipeline.pendingBreakdown.map((g) => `${g.label} ${g.value}`).join(" · ")}
+                      </p>
+                    )}
                   </div>
 
                   <div className="chart-card">
@@ -836,8 +844,9 @@ export default function DashboardPage() {
                   </div>
                   <p className="muted small" style={{ marginBottom: "0.9rem" }}>
                     Customers only (agents excluded), in your pipeline order — each customer is in exactly one stage, so the stages
-                    add up to the total. Scheduled / Viewed / Let Javier follow come from your Reason note; scheduling wins (e.g.
-                    "Scheduled, let Javier follow" = Scheduled). The rest come from Status.
+                    add up to the total. Scheduled / Viewed come from your Reason note; scheduling wins (e.g.
+                    "Scheduled, let Javier follow" = Scheduled). A "let Javier follow" note counts as Pending — the breakdown below
+                    shows what Pending leads are waiting on. The rest come from Status.
                   </p>
                   <div className="rate-row">
                     <div>
@@ -851,8 +860,9 @@ export default function DashboardPage() {
                       <span className="daily-stats-sub">Viewed</span>
                     </div>
                     <div>
-                      <span className="daily-stats-label">Let Javier follow</span>
-                      <span className="daily-stats-value">{stats.customerPipeline.javierRate ?? 0}%</span>
+                      <span className="daily-stats-label">Pending rate</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.pendingRate ?? 0}%</span>
+                      <span className="daily-stats-sub">incl. Let Javier follow</span>
                     </div>
                     <div>
                       <span className="daily-stats-label">Drop rate</span>
@@ -876,6 +886,39 @@ export default function DashboardPage() {
                       </div>
                     ))}
                   </div>
+                </div>
+
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    Pending breakdown ({(stats.customerPipeline.stages.find((x) => x.label === "Pending") || { value: 0 }).value} customers)
+                  </div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    What each Pending customer is waiting on, from the Reason note.
+                  </p>
+                  {stats.customerPipeline.pendingBreakdown.length ? (
+                    <div className="table-wrap">
+                      <table className="reason-table">
+                        <thead>
+                          <tr>
+                            <th>Pending — waiting on</th>
+                            <th>Customers</th>
+                            <th>% of Pending</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.customerPipeline.pendingBreakdown.map((g) => (
+                            <tr key={g.label}>
+                              <td>{g.label}</td>
+                              <td>{g.value}</td>
+                              <td>{g.pct}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted small">No pending customers in this period.</p>
+                  )}
                 </div>
 
                 <div className="chart-card">
@@ -1105,29 +1148,56 @@ export default function DashboardPage() {
 
                   <div className="chart-card">
                     <div className="chart-card-title">
-                      Reasons ({stats.dropReasonsRaw.length}) — what rolled into each bucket above
+                      Reasons by group ({stats.reasonTree.length} groups, {stats.dropReasonsRaw.length} reasons)
                     </div>
-                    {stats.dropReasonsRaw.length ? (
+                    <p className="muted small" style={{ marginBottom: "0.6rem" }}>
+                      Click a group to hide or show its reasons. Spelling variants are merged.
+                    </p>
+                    {stats.reasonTree.length ? (
                       <div className="table-wrap table-scroll">
                         <table className="reason-table">
                           <thead>
                             <tr>
-                              <th>Reason (spelling variants merged)</th>
+                              <th>Group / reason</th>
                               <th>Count</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {stats.dropReasonsRaw.map((r) => (
-                              <tr key={r.label}>
-                                <td>
-                                  {r.label}
-                                  {r.variants.length > 1 && (
-                                    <div className="muted small">Written as: {r.variants.map((v) => `“${v}”`).join(", ")}</div>
-                                  )}
-                                </td>
-                                <td>{r.value.toLocaleString()}</td>
-                              </tr>
-                            ))}
+                            {stats.reasonTree.map((g) => {
+                              const closed = !!closedReasonGroups[g.label];
+                              return [
+                                <tr
+                                  key={`g-${g.label}`}
+                                  className="reason-group-row"
+                                  onClick={() => setClosedReasonGroups((c) => ({ ...c, [g.label]: !c[g.label] }))}
+                                >
+                                  <td>
+                                    <span className="reason-caret">{closed ? "▸" : "▾"}</span> <strong>{g.label}</strong>{" "}
+                                    <span className="muted small">
+                                      ({g.children.length} reason{g.children.length === 1 ? "" : "s"}, {g.pct}%)
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <strong>{g.value.toLocaleString()}</strong>
+                                  </td>
+                                </tr>,
+                                ...(closed
+                                  ? []
+                                  : g.children.map((r) => (
+                                      <tr key={`r-${g.label}-${r.label}`} className="reason-child-row">
+                                        <td>
+                                          {r.label}
+                                          {r.variants.length > 1 && (
+                                            <div className="muted small">
+                                              Written as: {r.variants.map((v) => `“${v}”`).join(", ")}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td>{r.value.toLocaleString()}</td>
+                                      </tr>
+                                    ))),
+                              ];
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -1203,11 +1273,11 @@ function computeFollowUps(leads, refDate) {
 // Applied to the normalized reason text (see normalizeReason), so spelling
 // and capitalisation variants all land in the same bucket.
 const REASON_RULES = [
+  { test: /\bagent\b/, label: "Agent" },
   { test: /expired/, label: "Property expired" },
   { test: /no whatsapp|whatsapp error|blocked/, label: "No WhatsApp contact" },
   { test: /no property name/, label: "Missing property info" },
   { test: /no match/, label: "No matching property" },
-  { test: /\bagent\b/, label: "Agent lead (no follow-up needed)" },
   { test: /schedul/, label: "Scheduled" },
   { test: /viewed/, label: "Unit viewed" },
   { test: /javier/, label: "Let Javier follow" },
@@ -1332,6 +1402,22 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
   const dropReasonsRaw = Object.entries(reasonCounts)
     .map(([n, value]) => ({ label: displayReason(n), value, variants: Array.from(reasonVariants[n]) }))
     .sort((a, b) => b.value - a.value);
+  // Same reasons, nested under their group (Agent → "Agent, no need follow",
+  // "Agent, property expired", …) for the grouped table.
+  const tree = {};
+  for (const [n, value] of Object.entries(reasonCounts)) {
+    const g = categorizeReason(n);
+    const node = (tree[g] = tree[g] || { label: g, value: 0, children: [] });
+    node.value += value;
+    node.children.push({ label: displayReason(n), value, variants: Array.from(reasonVariants[n]) });
+  }
+  const reasonTree = Object.values(tree)
+    .map((g) => ({
+      ...g,
+      pct: groupedTotal ? Math.round((g.value / groupedTotal) * 100) : 0,
+      children: g.children.sort((a, b) => b.value - a.value),
+    }))
+    .sort((a, b) => b.value - a.value);
 
   // Agent vs customer, plus the same split per platform.
   const leadTypeCounts = {};
@@ -1362,6 +1448,7 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
     leadSource,
     dropReasonsGrouped,
     dropReasonsRaw,
+    reasonTree,
     needsFollowUp,
     propertyTable,
     dailyTrend,
@@ -1436,14 +1523,14 @@ const isExpiredReason = (l) => /expired/.test(normalizeReason(l.customer_status_
 // Your pipeline, in order. Every lead lands in exactly one stage, so the
 // stages always add up to the total. What you wrote in the Reason column
 // wins over the status: anything mentioning scheduling is Scheduled (even
-// "Scheduled, let Javier follow"), then Viewed, then Let Javier follow;
-// everything else falls back to its status.
-const PIPELINE_STAGES = ["Scheduled", "Viewed", "Let Javier follow", "Follow-up", "Pending", "Check", "Drop", "(blank)"];
+// "Scheduled, let Javier follow"), then Viewed; a "let Javier follow" note
+// counts as Pending; everything else falls back to its status.
+const PIPELINE_STAGES = ["Scheduled", "Viewed", "Follow-up", "Pending", "Check", "Drop", "(blank)"];
 function pipelineStage(l) {
   const n = normalizeReason(l.customer_status_reason);
   if (/schedul/.test(n)) return "Scheduled";
   if (/viewed/.test(n)) return "Viewed";
-  if (/javier/.test(n)) return "Let Javier follow";
+  if (/javier/.test(n)) return "Pending";
   const s = statusKey(l.customer_status);
   if (s === "followup") return "Follow-up";
   if (s === "pending") return "Pending";
@@ -1463,21 +1550,39 @@ function pipelineRates(stages, base) {
   return {
     scheduleRate: pct(stages["Scheduled"] + stages["Viewed"]),
     viewRate: pct(stages["Viewed"]),
-    javierRate: pct(stages["Let Javier follow"]),
+    pendingRate: pct(stages["Pending"]),
     dropRate: pct(stages["Drop"]),
   };
 }
+// What a Pending lead is waiting on, read from its Reason note.
+function pendingSubgroup(l) {
+  const n = normalizeReason(l.customer_status_reason);
+  if (/javier/.test(n)) return "Let Javier follow";
+  if (/wait|reply/.test(n)) return "Waiting for customer reply";
+  if (!n) return "Pending (no note)";
+  return displayReason(n);
+}
 function computePipeline(leads, customersOnly) {
   const stages = emptyStages();
+  const pending = {};
   let base = 0;
   for (const l of leads) {
     if (customersOnly && leadType(l) !== "Customer") continue;
-    stages[pipelineStage(l)]++;
+    const st = pipelineStage(l);
+    stages[st]++;
+    if (st === "Pending") {
+      const g = pendingSubgroup(l);
+      pending[g] = (pending[g] || 0) + 1;
+    }
     base++;
   }
+  const pendingTotal = stages["Pending"];
   return {
     total: base,
     stages: PIPELINE_STAGES.map((s) => ({ label: s, value: stages[s], pct: base ? Math.round((stages[s] / base) * 100) : 0 })),
+    pendingBreakdown: Object.entries(pending)
+      .map(([label, value]) => ({ label, value, pct: pendingTotal ? Math.round((value / pendingTotal) * 100) : 0 }))
+      .sort((a, b) => b.value - a.value),
     ...pipelineRates(stages, base),
   };
 }

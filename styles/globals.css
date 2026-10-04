@@ -1449,3 +1449,22 @@ details.chart-card[open] summary::before {
   flex-direction: column;
   gap: 0.1rem;
 }
+
+/* Reasons tab — grouped table */
+.reason-group-row {
+  cursor: pointer;
+}
+
+.reason-group-row td {
+  background: var(--paper);
+}
+
+.reason-child-row td:first-child {
+  padding-left: 2.1rem;
+}
+
+.reason-caret {
+  display: inline-block;
+  width: 0.9rem;
+  color: var(--ink-soft);
+}
