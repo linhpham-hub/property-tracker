@@ -13,6 +13,16 @@ const MATURE_DAYS = 5; // your own follow-up rule: judge a lead only once it's h
 const UNRESOLVED_STATUSES = new Set(["", "Pending", "Check"]);
 const STORAGE_KEY = "property-tracker-lead-dashboard-state";
 
+// Overview carries the views you check most; the rest are deep dives.
+const DASHBOARD_TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "listings", label: "Listings" },
+  { key: "platforms", label: "Platforms & timing" },
+  { key: "pipeline", label: "Pipeline" },
+  { key: "people", label: "People" },
+  { key: "reasons", label: "Reasons" },
+];
+
 function loadSavedState() {
   if (typeof window === "undefined") return {};
   try {
@@ -39,16 +49,19 @@ export default function DashboardPage() {
     LEAD_TYPES.includes(saved.enquirerFilter) ? saved.enquirerFilter : "all"
   );
   const [propertySearch, setPropertySearch] = useState(saved.propertySearch || "");
+  const [activeTab, setActiveTab] = useState(
+    DASHBOARD_TABS.some((t) => t.key === saved.activeTab) ? saved.activeTab : "overview"
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       sessionStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch })
+        JSON.stringify({ yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch, activeTab })
       );
     } catch (e) {}
-  }, [yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch]);
+  }, [yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch, activeTab]);
 
   // A day only means something inside one specific month.
   useEffect(() => {
@@ -201,7 +214,16 @@ export default function DashboardPage() {
       [...filteredLeads].sort((a, b) => (b.enquiry_date || "").localeCompare(a.enquiry_date || "") || (b.row_no || 0) - (a.row_no || 0)),
     [filteredLeads]
   );
-  const showLeadList = dayFilter !== "all" || propertySearch.trim() !== "" || enquirerFilter !== "all" || monthFilter !== "all";
+  const showLeadList = true; // lives on the People tab, always shown there
+
+  const expiredDemand = useMemo(
+    () => computeExpiredDemand(filteredLeads, leads, now, propertyLinksByName),
+    [filteredLeads, leads, now, propertyLinksByName]
+  );
+  const bestWeekday = useMemo(
+    () => (stats.weekdays.length ? stats.weekdays.reduce((a, b) => (b.value > a.value ? b : a)) : null),
+    [stats.weekdays]
+  );
   const lastSynced = useMemo(() => {
     const dates = leads.map((l) => l.synced_at).filter(Boolean);
     if (!dates.length) return null;
@@ -314,416 +336,808 @@ export default function DashboardPage() {
               <StatTile label="Follow-up" value={stats.followUp.toLocaleString()} />
               <StatTile label="Active (Follow-up + Pending + Check)" value={stats.activePipeline.toLocaleString()} />
               <StatTile
+                label="Schedule rate (customers)"
+                value={stats.customerPipeline.scheduleRate != null ? `${stats.customerPipeline.scheduleRate}%` : "—"}
+              />
+              <StatTile
+                label="View rate (customers)"
+                value={stats.customerPipeline.viewRate != null ? `${stats.customerPipeline.viewRate}%` : "—"}
+              />
+              <StatTile
                 label={`Drop rate (${MATURE_DAYS}+ day leads)`}
                 value={stats.dropRateMatured !== null ? `${stats.dropRateMatured}%` : "—"}
               />
             </div>
 
-            <div className="dashboard-grid">
-              <div className="chart-card">
-                <div className="chart-card-title">
-                  {stats.dailyTrend.some((d) => d.weekly) ? "Leads per week" : "Leads per day"}
-                  {dayFilter !== "all" && <span className="muted small"> — whole month shown, day {dayFilter} marked</span>}
+            <div className="tab-bar" role="tablist">
+              {DASHBOARD_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === t.key}
+                  className={`tab-button ${activeTab === t.key ? "tab-active" : ""}`}
+                  onClick={() => setActiveTab(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {activeTab === "overview" && (
+              <div className="tab-panel">
+                <div className="insight-strip">
+                  <button type="button" className="insight-card" onClick={() => setActiveTab("listings")}>
+                    <span className="insight-value">{expiredDemand.lostCustomers.toLocaleString()}</span>
+                    <span className="insight-label">
+                      customer leads lost because the listing had expired ({expiredDemand.customerShare}% of customers)
+                    </span>
+                    <span className="insight-link">By listing →</span>
+                  </button>
+                  <button type="button" className="insight-card" onClick={() => setActiveTab("people")}>
+                    <span className="insight-value">{stats.repeatCustomers.filter((c) => c.hot).length}</span>
+                    <span className="insight-label">hot buyers — customers with 3+ enquiries or a repeat in the last 14 days</span>
+                    <span className="insight-link">Call list →</span>
+                  </button>
+                  <button type="button" className="insight-card" onClick={() => setActiveTab("pipeline")}>
+                    <span className="insight-value">
+                      {stats.customerPipeline.scheduleRate != null ? `${stats.customerPipeline.scheduleRate}%` : "—"}
+                    </span>
+                    <span className="insight-label">
+                      of customers got a viewing scheduled ({stats.customerPipeline.viewRate ?? 0}% viewed)
+                    </span>
+                    <span className="insight-link">Pipeline →</span>
+                  </button>
+                  <button type="button" className="insight-card" onClick={() => setActiveTab("platforms")}>
+                    <span className="insight-value">{bestWeekday ? bestWeekday.label : "—"}</span>
+                    <span className="insight-label">
+                      busiest weekday{bestWeekday ? ` — ${bestWeekday.value} leads on average` : ""}
+                    </span>
+                    <span className="insight-link">Timing →</span>
+                  </button>
                 </div>
-                {stats.dailyTrend.length > 1 ? (
-                  <LineChart
-                    data={stats.dailyTrend}
-                    refValue={stats.dailyStats ? stats.dailyStats.average : null}
-                    refLabel={stats.dailyStats ? `avg ${stats.dailyStats.average.toFixed(1)}` : ""}
-                    highlightIndex={dayFilter !== "all" ? Number(dayFilter) - 1 : null}
-                  />
-                ) : (
-                  <p className="muted small">Not enough dated leads yet to chart this.</p>
-                )}
-                {stats.dailyStats && (
-                  <div className="daily-stats">
-                    <div>
-                      <span className="daily-stats-label">Average / day</span>
-                      <span className="daily-stats-value">{stats.dailyStats.average.toFixed(1)}</span>
+
+                <div className="dashboard-grid">
+                  <div className="chart-card">
+                    <div className="chart-card-title">
+                      {stats.dailyTrend.some((d) => d.weekly) ? "Leads per week" : "Leads per day"}
+                      {dayFilter !== "all" && <span className="muted small"> — whole month shown, day {dayFilter} marked</span>}
                     </div>
-                    <div>
-                      <span className="daily-stats-label">Median</span>
-                      <span className="daily-stats-value">{Number.isInteger(stats.dailyStats.median) ? stats.dailyStats.median : stats.dailyStats.median.toFixed(1)}</span>
-                    </div>
-                    <div>
-                      <span className="daily-stats-label">Busiest</span>
-                      <span className="daily-stats-value">{stats.dailyStats.max}</span>
-                      <span className="daily-stats-sub">{stats.dailyStats.busiestLabel}</span>
-                    </div>
-                    <div>
-                      <span className="daily-stats-label">Quietest</span>
-                      <span className="daily-stats-value">{stats.dailyStats.min}</span>
-                      <span className="daily-stats-sub">{stats.dailyStats.quietestLabel}</span>
-                    </div>
-                    <div>
-                      <span className="daily-stats-label">Days with 0</span>
-                      <span className="daily-stats-value">{stats.dailyStats.zeroDays}</span>
-                      <span className="daily-stats-sub">of {stats.dailyStats.days}</span>
-                    </div>
+                    {stats.dailyTrend.length > 1 ? (
+                      <LineChart
+                        data={stats.dailyTrend}
+                        refValue={stats.dailyStats ? stats.dailyStats.average : null}
+                        refLabel={stats.dailyStats ? `avg ${stats.dailyStats.average.toFixed(1)}` : ""}
+                        highlightIndex={dayFilter !== "all" ? Number(dayFilter) - 1 : null}
+                      />
+                    ) : (
+                      <p className="muted small">Not enough dated leads yet to chart this.</p>
+                    )}
+                    {stats.dailyStats && (
+                      <div className="daily-stats">
+                        <div>
+                          <span className="daily-stats-label">Average / day</span>
+                          <span className="daily-stats-value">{stats.dailyStats.average.toFixed(1)}</span>
+                        </div>
+                        <div>
+                          <span className="daily-stats-label">Median</span>
+                          <span className="daily-stats-value">{Number.isInteger(stats.dailyStats.median) ? stats.dailyStats.median : stats.dailyStats.median.toFixed(1)}</span>
+                        </div>
+                        <div>
+                          <span className="daily-stats-label">Busiest</span>
+                          <span className="daily-stats-value">{stats.dailyStats.max}</span>
+                          <span className="daily-stats-sub">{stats.dailyStats.busiestLabel}</span>
+                        </div>
+                        <div>
+                          <span className="daily-stats-label">Quietest</span>
+                          <span className="daily-stats-value">{stats.dailyStats.min}</span>
+                          <span className="daily-stats-sub">{stats.dailyStats.quietestLabel}</span>
+                        </div>
+                        <div>
+                          <span className="daily-stats-label">Days with 0</span>
+                          <span className="daily-stats-value">{stats.dailyStats.zeroDays}</span>
+                          <span className="daily-stats-sub">of {stats.dailyStats.days}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              <div className="chart-card">
-                <div className="chart-card-title">Leads by source</div>
-                {stats.leadSource.length ? (
-                  <DonutChart data={stats.leadSource} />
-                ) : (
-                  <p className="muted small">No source data yet.</p>
-                )}
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">Property type interest</div>
-                {stats.propertyType.length ? (
-                  <BarChart data={stats.propertyType} />
-                ) : (
-                  <p className="muted small">No property type data yet.</p>
-                )}
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">Pipeline stage</div>
-                {stats.customerStatus.length ? (
-                  <DonutChart data={stats.customerStatus} />
-                ) : (
-                  <p className="muted small">No status data yet.</p>
-                )}
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">Why leads drop or close</div>
-                {stats.dropReasonsGrouped.length ? (
-                  <HBarChart data={stats.dropReasonsGrouped} />
-                ) : (
-                  <p className="muted small">No reason data yet.</p>
-                )}
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">
-                  Reasons ({stats.dropReasonsRaw.length}) — what rolled into each bucket above
+                  <div className="chart-card">
+                    <div className="chart-card-title">Leads by source</div>
+                    {stats.leadSource.length ? (
+                      <DonutChart data={stats.leadSource} />
+                    ) : (
+                      <p className="muted small">No source data yet.</p>
+                    )}
+                  </div>
                 </div>
-                {stats.dropReasonsRaw.length ? (
-                  <div className="table-wrap table-scroll">
-                    <table className="reason-table">
-                      <thead>
-                        <tr>
-                          <th>Reason (spelling variants merged)</th>
-                          <th>Count</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stats.dropReasonsRaw.map((r) => (
-                          <tr key={r.label}>
-                            <td>
-                              {r.label}
-                              {r.variants.length > 1 && (
-                                <div className="muted small">Written as: {r.variants.map((v) => `“${v}”`).join(", ")}</div>
-                              )}
-                            </td>
-                            <td>{r.value.toLocaleString()}</td>
+
+                <div className="dashboard-grid">
+                  <div className="chart-card">
+                    <div className="chart-card-title">Pipeline ({stats.pipeline.total.toLocaleString()} leads)</div>
+                    {stats.pipeline.total ? (
+                      <HBarChart data={stats.pipeline.stages} />
+                    ) : (
+                      <p className="muted small">No leads in this range.</p>
+                    )}
+                    <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                      In pipeline order; every lead is in exactly one stage. Scheduled / Viewed / Let Javier follow come from your
+                      Reason note (scheduling wins, e.g. "Scheduled, let Javier follow" = Scheduled); the rest from Status.
+                    </p>
+                  </div>
+
+                  <div className="chart-card">
+                    <div className="chart-card-title">Agent vs customer</div>
+                    {stats.leadTypes.length ? (
+                      <DonutChart data={stats.leadTypes} />
+                    ) : (
+                      <p className="muted small">No leads in this range.</p>
+                    )}
+                    <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                      Agent = Enquirer Type "Agent", or "Agent" written in the Reason column. Customer = every other lead.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="dashboard-grid">
+                  <div className="chart-card">
+                    <div className="chart-card-title">
+                      Top {stats.topPropertiesByStatus.active.length} most-enquired properties — Active
+                    </div>
+                    {stats.topPropertiesByStatus.active.length ? (
+                      <HBarChart data={stats.topPropertiesByStatus.active} />
+                    ) : (
+                      <p className="muted small">No active-listing property data yet.</p>
+                    )}
+                  </div>
+
+                  <div className="chart-card">
+                    <div className="chart-card-title">
+                      Top {stats.topPropertiesByStatus.expired.length} most-enquired properties — Expired
+                    </div>
+                    {stats.topPropertiesByStatus.expired.length ? (
+                      <HBarChart data={stats.topPropertiesByStatus.expired} />
+                    ) : (
+                      <p className="muted small">No expired-listing property data yet.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "listings" && (
+              <div className="tab-panel">
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    Leads lost to expired listings ({expiredDemand.rows.length} listings)
+                  </div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    Based on your "Property expired" note, made when you checked the listing 5+ days after the welcome message.
+                    {" "}{expiredDemand.lost.toLocaleString()} leads in this period ({expiredDemand.share}%) were lost this way —
+                    {" "}{expiredDemand.lostCustomers.toLocaleString()} of them customers ({expiredDemand.customerShare}% of all
+                    customers). Listings losing the most customers are the strongest candidates to relist or to offer a similar unit.
+                  </p>
+                  {expiredDemand.rows.length ? (
+                    <div className="table-wrap table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Property</th>
+                            <th>Lost leads</th>
+                            <th>Customers</th>
+                            <th>Agents</th>
+                            <th>Lost in last 30 days</th>
+                            <th>Last lost lead</th>
+                            <th>Listings</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="muted small">No reason data yet.</p>
-                )}
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">Agent vs customer</div>
-                {stats.leadTypes.length ? (
-                  <DonutChart data={stats.leadTypes} />
-                ) : (
-                  <p className="muted small">No leads in this range.</p>
-                )}
-                <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                  Agent = Enquirer Type "Agent", or "Agent" written in the Reason column. Customer = Enquirer Type
-                  "Consumer". Not specified = neither (mostly 99.co, which has no Enquirer Type).
-                </p>
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">Agent vs customer, by platform</div>
-                {stats.leadTypeBySource.length ? (
-                  <div className="table-wrap">
-                    <table className="reason-table">
-                      <thead>
-                        <tr>
-                          <th>Platform</th>
-                          <th>Agent</th>
-                          <th>Customer</th>
-                          <th>Not specified</th>
-                          <th>Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stats.leadTypeBySource.map((r) => (
-                          <tr key={r.source}>
-                            <td>{r.source}</td>
-                            <td>{r.Agent.toLocaleString()}</td>
-                            <td>{r.Customer.toLocaleString()}</td>
-                            <td>{r["Not specified"].toLocaleString()}</td>
-                            <td>
-                              <strong>{r.total.toLocaleString()}</strong>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="muted small">No leads in this range.</p>
-                )}
-              </div>
-            </div>
-
-            <div className="dashboard-grid" style={{ marginTop: "1.25rem" }}>
-              <div className="chart-card">
-                <div className="chart-card-title">
-                  Top {stats.topPropertiesByStatus.active.length} most-enquired properties — Active
-                </div>
-                {stats.topPropertiesByStatus.active.length ? (
-                  <HBarChart data={stats.topPropertiesByStatus.active} />
-                ) : (
-                  <p className="muted small">No active-listing property data yet.</p>
-                )}
-              </div>
-
-              <div className="chart-card">
-                <div className="chart-card-title">
-                  Top {stats.topPropertiesByStatus.expired.length} most-enquired properties — Expired
-                </div>
-                {stats.topPropertiesByStatus.expired.length ? (
-                  <HBarChart data={stats.topPropertiesByStatus.expired} />
-                ) : (
-                  <p className="muted small">No expired-listing property data yet.</p>
-                )}
-              </div>
-            </div>
-
-            <div className="chart-card" style={{ marginTop: "1.25rem" }}>
-              <div className="chart-card-title">Listings needing attention ({attention.rows.length})</div>
-              <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                Active listings in Property_master with no enquiries, or fewer than half of what a typical active listing got
-                ({attention.median % 1 ? attention.median.toFixed(1) : attention.median} enquiries) in the selected period.
-                {" "}{attention.activeCount} active listings checked.
-              </p>
-              {attention.rows.length ? (
-                <div className="table-wrap table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Property</th>
-                        <th>Enquiries</th>
-                        <th>Flag</th>
-                        <th>Last enquiry (any time)</th>
-                        <th>Listings</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {attention.rows.map((r) => (
-                        <tr key={r.id}>
-                          <td>
-                            <a href={`/property/${r.id}`} target="_blank" rel="noopener noreferrer">
-                              {r.name}
-                            </a>
-                          </td>
-                          <td>{r.count}</td>
-                          <td>
-                            <span className={`flag-chip ${r.count === 0 ? "flag-none" : "flag-low"}`}>{r.flag}</span>
-                          </td>
-                          <td>{r.lastEnquiry ? formatDate(r.lastEnquiry) : "Never"}</td>
-                          <td>
-                            {r.links.length
-                              ? r.links.map((l) => (
-                                  <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" className="inline-link">
-                                    {l.label} ↗
-                                  </a>
-                                ))
-                              : "—"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="muted small">Every active listing is getting a normal share of enquiries in this period.</p>
-              )}
-            </div>
-
-            <div className="chart-card" style={{ marginTop: "1.25rem" }}>
-              <div className="chart-card-title">Leads by property</div>
-              <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                "Enquiries" = contact rows recorded in the sheet for that property (the sheet doesn't track page views/clicks
-                separately). Listings come from that property's entry in Property_master when there's a name match — the same
-                place your Propertyguru/99.co/SRX/EdgeProp links live — falling back to whatever link was recorded directly
-                on a lead if there's no match. Use the property search at the top to narrow this table.
-              </p>
-              <div className="table-wrap table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Property</th>
-                      <th>Listings</th>
-                      <th>Enquiries</th>
-                      <th>Drop</th>
-                      <th>Follow-up</th>
-                      <th>Pending</th>
-                      <th>Check</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPropertyRows.map((r) => {
-                      const compiled = parseCompiledLinks(propertyLinksByName[r.property_name.trim().toLowerCase()] || "");
-                      const rowLinks = sortLinksByPriority(
-                        mergeLinks(compiled, r.links.map((url) => ({ label: linkLabel(url), url })))
-                      );
-                      return (
-                        <tr key={r.property_name}>
-                          <td>{r.property_name}</td>
-                          <td>
-                            {rowLinks.length ? (
-                              rowLinks.map((l) => (
-                                <div key={l.url} style={{ marginBottom: "0.4rem" }}>
-                                  <strong>{l.label}:</strong>
-                                  <br />
-                                  <a href={l.url} target="_blank" rel="noopener noreferrer">
-                                    {l.url}
-                                  </a>
-                                </div>
-                              ))
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                          <td>{r.total}</td>
-                          <td>{r.drop}</td>
-                          <td>{r.followUp}</td>
-                          <td>{r.pending}</td>
-                          <td>{r.check}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  {filteredPropertyRows.length > 0 && (
-                    <tfoot>
-                      <tr className="table-total-row">
-                        <td>
-                          <strong>Total ({filteredPropertyRows.length} properties)</strong>
-                        </td>
-                        <td></td>
-                        <td>
-                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.total, 0).toLocaleString()}</strong>
-                        </td>
-                        <td>
-                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.drop, 0).toLocaleString()}</strong>
-                        </td>
-                        <td>
-                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.followUp, 0).toLocaleString()}</strong>
-                        </td>
-                        <td>
-                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.pending, 0).toLocaleString()}</strong>
-                        </td>
-                        <td>
-                          <strong>{filteredPropertyRows.reduce((s, r) => s + r.check, 0).toLocaleString()}</strong>
-                        </td>
-                      </tr>
-                    </tfoot>
+                        </thead>
+                        <tbody>
+                          {expiredDemand.rows.map((r) => (
+                            <tr key={r.name}>
+                              <td>{r.name}</td>
+                              <td>{r.lost}</td>
+                              <td>
+                                <strong>{r.customers}</strong>
+                              </td>
+                              <td>{r.agents}</td>
+                              <td>
+                                {r.last30 > 0 ? <span className="flag-chip flag-none">{r.last30}</span> : <span className="muted">0</span>}
+                              </td>
+                              <td className="nowrap">{r.last ? formatDate(r.last) : "—"}</td>
+                              <td>
+                                {r.links.length
+                                  ? r.links.map((l) => (
+                                      <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" className="inline-link">
+                                        {l.label} ↗
+                                      </a>
+                                    ))
+                                  : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted small">No leads were lost to an expired listing in this period.</p>
                   )}
-                </table>
-              </div>
-              {filteredPropertyRows.length === 0 && <p className="muted small">No properties match.</p>}
-            </div>
+                </div>
 
-            {showLeadList && (
-              <div className="chart-card" style={{ marginTop: "1.25rem" }}>
-                <div className="chart-card-title">Lead list ({leadList.length})</div>
-                <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                  Every lead matching the filters above, newest first — pick a day, a property or an enquirer type to deep-dive.
-                </p>
-                {leadList.length ? (
+                <div className="chart-card">
+                  <div className="chart-card-title">Listings needing attention ({attention.rows.length})</div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    Active listings in Property_master with no enquiries, or fewer than half of what a typical active listing got
+                    ({attention.median % 1 ? attention.median.toFixed(1) : attention.median} enquiries) in the selected period.
+                    {" "}{attention.activeCount} active listings checked.
+                  </p>
+                  {attention.rows.length ? (
+                    <div className="table-wrap table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Property</th>
+                            <th>Enquiries</th>
+                            <th>Customers</th>
+                            <th>Agents</th>
+                            <th>Flag</th>
+                            <th>Last enquiry (any time)</th>
+                            <th>Listings</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {attention.rows.map((r) => (
+                            <tr key={r.id}>
+                              <td>
+                                <a href={`/property/${r.id}`} target="_blank" rel="noopener noreferrer">
+                                  {r.name}
+                                </a>
+                              </td>
+                              <td>{r.count}</td>
+                              <td>{r.customers}</td>
+                              <td>{r.agents}</td>
+                              <td>
+                                <span className={`flag-chip ${r.count === 0 ? "flag-none" : "flag-low"}`}>{r.flag}</span>
+                              </td>
+                              <td>{r.lastEnquiry ? formatDate(r.lastEnquiry) : "Never"}</td>
+                              <td>
+                                {r.links.length
+                                  ? r.links.map((l) => (
+                                      <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" className="inline-link">
+                                        {l.label} ↗
+                                      </a>
+                                    ))
+                                  : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted small">Every active listing is getting a normal share of enquiries in this period.</p>
+                  )}
+                </div>
+
+                <div className="chart-card">
+                  <div className="chart-card-title">Leads by property</div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    "Enquiries" = contact rows recorded in the sheet for that property (the sheet doesn't track page views/clicks
+                    separately). Listings come from that property's entry in Property_master when there's a name match — the same
+                    place your Propertyguru/99.co/SRX/EdgeProp links live — falling back to whatever link was recorded directly
+                    on a lead if there's no match. Use the property search at the top to narrow this table.
+                  </p>
                   <div className="table-wrap table-scroll">
                     <table>
                       <thead>
                         <tr>
-                          <th>Date</th>
                           <th>Property</th>
-                          <th>Customer</th>
-                          <th>Mobile</th>
-                          <th>Source</th>
-                          <th>Who</th>
-                          <th>Status</th>
-                          <th>Reason</th>
+                          <th>Listings</th>
+                          <th>Enquiries</th>
+                          <th>Customers</th>
+                          <th>Agents</th>
+                          <th>Drop</th>
+                          <th>Follow-up</th>
+                          <th>Pending</th>
+                          <th>Check</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {leadList.slice(0, 500).map((l) => (
-                          <tr key={l.id}>
-                            <td style={{ whiteSpace: "nowrap" }}>{l.enquiry_date ? formatDate(l.enquiry_date) : "—"}</td>
-                            <td>{l.property_name || "—"}</td>
-                            <td>{l.full_name && l.full_name !== "-" ? l.full_name : l.first_name || "—"}</td>
-                            <td>{l.mobile || "—"}</td>
-                            <td>{l.source_data || "—"}</td>
-                            <td>{leadType(l)}</td>
-                            <td>{l.customer_status || "(blank)"}</td>
-                            <td>{l.customer_status_reason || "—"}</td>
+                        {filteredPropertyRows.map((r) => {
+                          const compiled = parseCompiledLinks(propertyLinksByName[r.property_name.trim().toLowerCase()] || "");
+                          const rowLinks = sortLinksByPriority(
+                            mergeLinks(compiled, r.links.map((url) => ({ label: linkLabel(url), url })))
+                          );
+                          return (
+                            <tr key={r.property_name}>
+                              <td>{r.property_name}</td>
+                              <td>
+                                {rowLinks.length ? (
+                                  rowLinks.map((l) => (
+                                    <div key={l.url} style={{ marginBottom: "0.4rem" }}>
+                                      <strong>{l.label}:</strong>
+                                      <br />
+                                      <a href={l.url} target="_blank" rel="noopener noreferrer">
+                                        {l.url}
+                                      </a>
+                                    </div>
+                                  ))
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                              <td>{r.total}</td>
+                              <td>{r.customers}</td>
+                              <td>{r.agents}</td>
+                              <td>{r.drop}</td>
+                              <td>{r.followUp}</td>
+                              <td>{r.pending}</td>
+                              <td>{r.check}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      {filteredPropertyRows.length > 0 && (
+                        <tfoot>
+                          <tr className="table-total-row">
+                            <td>
+                              <strong>Total ({filteredPropertyRows.length} properties)</strong>
+                            </td>
+                            <td></td>
+                            <td>
+                              <strong>{filteredPropertyRows.reduce((s, r) => s + r.total, 0).toLocaleString()}</strong>
+                            </td>
+                          <td>
+                            <strong>{filteredPropertyRows.reduce((s, r) => s + r.customers, 0).toLocaleString()}</strong>
+                          </td>
+                          <td>
+                            <strong>{filteredPropertyRows.reduce((s, r) => s + r.agents, 0).toLocaleString()}</strong>
+                          </td>
+                            <td>
+                              <strong>{filteredPropertyRows.reduce((s, r) => s + r.drop, 0).toLocaleString()}</strong>
+                            </td>
+                            <td>
+                              <strong>{filteredPropertyRows.reduce((s, r) => s + r.followUp, 0).toLocaleString()}</strong>
+                            </td>
+                            <td>
+                              <strong>{filteredPropertyRows.reduce((s, r) => s + r.pending, 0).toLocaleString()}</strong>
+                            </td>
+                            <td>
+                              <strong>{filteredPropertyRows.reduce((s, r) => s + r.check, 0).toLocaleString()}</strong>
+                            </td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                  {filteredPropertyRows.length === 0 && <p className="muted small">No properties match.</p>}
+                </div>
+
+                <div className="chart-card">
+                  <div className="chart-card-title">Property type interest</div>
+                  {stats.propertyType.length ? (
+                    <BarChart data={stats.propertyType} />
+                  ) : (
+                    <p className="muted small">No property type data yet.</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "platforms" && (
+              <div className="tab-panel">
+                <div className="chart-card">
+                  <div className="chart-card-title">Platform scorecard</div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    Pipeline counts and rates are for customers only (agents excluded). Each customer is in one stage, in your
+                    pipeline order. Schedule rate = Scheduled + Viewed; Drop rate = stage Drop.
+                  </p>
+                  <div className="table-wrap">
+                    <table className="scorecard-table">
+                      <thead>
+                        <tr>
+                          <th>Platform</th>
+                          <th>Leads</th>
+                          <th>Customers</th>
+                          {PIPELINE_STAGES.map((st) => (
+                            <th key={st}>{st}</th>
+                          ))}
+                          <th>Schedule rate</th>
+                          <th>View rate</th>
+                          <th>Drop rate</th>
+                          <th>Lost to expired listing</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stats.platforms.map((p) => (
+                          <tr key={p.source}>
+                            <td>
+                              <strong>{p.source}</strong>
+                            </td>
+                            <td>
+                              {p.leads.toLocaleString()} <span className="muted small">({p.share}%)</span>
+                            </td>
+                            <td>
+                              {p.customers.toLocaleString()} <span className="muted small">({p.customerPct ?? 0}%)</span>
+                            </td>
+                            {PIPELINE_STAGES.map((st) => (
+                              <td key={st}>{p.stages[st].toLocaleString()}</td>
+                            ))}
+                            <td>
+                              <strong>{p.scheduleRate != null ? `${p.scheduleRate}%` : "—"}</strong>
+                            </td>
+                            <td>
+                              <strong>{p.viewRate != null ? `${p.viewRate}%` : "—"}</strong>
+                            </td>
+                            <td>{p.dropRate != null ? `${p.dropRate}%` : "—"}</td>
+                            <td>{p.expiredPct != null ? `${p.expiredPct}%` : "—"}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                ) : (
-                  <p className="muted small">No leads match these filters.</p>
-                )}
-                {leadList.length > 500 && (
-                  <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                    Showing the newest 500 of {leadList.length.toLocaleString()} — narrow the filters to see the rest.
+                </div>
+
+                <div className="dashboard-grid">
+                  <div className="chart-card">
+                    <div className="chart-card-title">Average leads by weekday</div>
+                    {stats.weekdays.length ? (
+                      <BarChart data={stats.weekdays} valueFormat={(v) => v.toFixed(1)} />
+                    ) : (
+                      <p className="muted small">No dated leads in this period.</p>
+                    )}
+                    <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                      Leads divided by how many of each weekday fall in the period, so a month with five Mondays doesn't flatter
+                      Monday. Useful for when to refresh or bump listings.
+                    </p>
+                  </div>
+
+                  <div className="chart-card">
+                    <div className="chart-card-title">Agent vs customer, by platform</div>
+                    {stats.leadTypeBySource.length ? (
+                      <div className="table-wrap">
+                        <table className="reason-table">
+                          <thead>
+                            <tr>
+                              <th>Platform</th>
+                              <th>Agent</th>
+                              <th>Customer</th>
+                              <th>Customer share</th>
+                              <th>Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stats.leadTypeBySource.map((r) => (
+                              <tr key={r.source}>
+                                <td>{r.source}</td>
+                                <td>{r.Agent.toLocaleString()}</td>
+                                <td>{r.Customer.toLocaleString()}</td>
+                                <td>{r.total ? Math.round((r.Customer / r.total) * 100) : 0}%</td>
+                                <td>
+                                  <strong>{r.total.toLocaleString()}</strong>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="muted small">No leads in this range.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "pipeline" && (
+              <div className="tab-panel">
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    Customer pipeline ({stats.customerPipeline.total.toLocaleString()} customers)
+                  </div>
+                  <p className="muted small" style={{ marginBottom: "0.9rem" }}>
+                    Customers only (agents excluded), in your pipeline order — each customer is in exactly one stage, so the stages
+                    add up to the total. Scheduled / Viewed / Let Javier follow come from your Reason note; scheduling wins (e.g.
+                    "Scheduled, let Javier follow" = Scheduled). The rest come from Status.
                   </p>
+                  <div className="rate-row">
+                    <div>
+                      <span className="daily-stats-label">Schedule rate</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.scheduleRate ?? 0}%</span>
+                      <span className="daily-stats-sub">Scheduled + Viewed</span>
+                    </div>
+                    <div>
+                      <span className="daily-stats-label">View rate</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.viewRate ?? 0}%</span>
+                      <span className="daily-stats-sub">Viewed</span>
+                    </div>
+                    <div>
+                      <span className="daily-stats-label">Let Javier follow</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.javierRate ?? 0}%</span>
+                    </div>
+                    <div>
+                      <span className="daily-stats-label">Drop rate</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.dropRate ?? 0}%</span>
+                      <span className="daily-stats-sub">stage Drop</span>
+                    </div>
+                  </div>
+                  <div className="funnel">
+                    {stats.customerPipeline.stages.map((st) => (
+                      <div className="funnel-row" key={st.label}>
+                        <div className="funnel-label">
+                          <span className="funnel-name">{st.label}</span>
+                        </div>
+                        <div className="funnel-track">
+                          <div className="funnel-bar" style={{ width: `${st.value ? Math.max(st.pct, 0.8) : 0}%` }} />
+                        </div>
+                        <div className="funnel-num">
+                          <strong>{st.value.toLocaleString()}</strong>
+                          <span className="muted small">{st.pct}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="chart-card">
+                  <div className="chart-card-title">Pipeline by property</div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    Customers only, properties with 3+ customer leads in the period — most viewings scheduled first.
+                  </p>
+                  {stats.pipelineByProperty.length ? (
+                    <div className="table-wrap table-scroll">
+                      <table className="scorecard-table">
+                        <thead>
+                          <tr>
+                            <th>Property</th>
+                            <th>Customers</th>
+                            {PIPELINE_STAGES.map((st) => (
+                              <th key={st}>{st}</th>
+                            ))}
+                            <th>Schedule rate</th>
+                            <th>View rate</th>
+                            <th>Drop rate</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.pipelineByProperty.map((p) => (
+                            <tr key={p.name}>
+                              <td>{p.name}</td>
+                              <td>{p.customers}</td>
+                              {PIPELINE_STAGES.map((st) => (
+                                <td key={st}>{p.stages[st] || <span className="muted">0</span>}</td>
+                              ))}
+                              <td>
+                                <strong>{p.scheduleRate}%</strong>
+                              </td>
+                              <td>
+                                <strong>{p.viewRate}%</strong>
+                              </td>
+                              <td>{p.dropRate}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted small">No property has 3+ customer leads in this period.</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "people" && (
+              <div className="tab-panel">
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    Repeat customers &amp; hot buyers ({stats.repeatCustomers.length})
+                  </div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    Customers who enquired more than once in the period, matched by mobile number. Hot = 3+ enquiries, or a repeat enquiry in the last 14 days — your call list. WhatsApp opens a chat with that number.
+                  </p>
+                  {stats.repeatCustomers.length ? (
+                    <div className="table-wrap table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th></th>
+                            <th>Customer</th>
+                            <th>Mobile</th>
+                            <th>Enquiries</th>
+                            <th>Properties</th>
+                            <th>First → last</th>
+                            <th>Latest stage</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.repeatCustomers.map((c) => (
+                            <tr key={c.key}>
+                              <td>{c.hot && <span className="flag-chip flag-none">Hot</span>}</td>
+                              <td>{c.name || "—"}</td>
+                              <td>
+                                <span className="nowrap">{c.mobile}</span>
+                                <div>
+                                  <a href={c.whatsapp} target="_blank" rel="noopener noreferrer" className="inline-link">
+                                    WhatsApp ↗
+                                  </a>
+                                </div>
+                              </td>
+                              <td>{c.count}</td>
+                              <td>
+                                {c.properties.slice(0, 3).join(", ")}
+                                {c.properties.length > 3 ? ` +${c.properties.length - 3} more` : ""}
+                              </td>
+                              <td className="nowrap">
+                                {c.first ? formatDate(c.first) : "—"} → {c.last ? formatDate(c.last) : "—"}
+                              </td>
+                              <td>
+                                {c.lastStage}
+                                {c.lastReason && <div className="muted small">{c.lastReason}</div>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted small">None in this period.</p>
+                  )}
+                </div>
+
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    Repeat agents ({stats.repeatAgents.length})
+                  </div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    Agents who enquired more than once in the period — useful for co-broking: they likely have buyers or tenants for these listings.
+                  </p>
+                  {stats.repeatAgents.length ? (
+                    <div className="table-wrap table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th></th>
+                            <th>Agent</th>
+                            <th>Mobile</th>
+                            <th>Enquiries</th>
+                            <th>Properties</th>
+                            <th>First → last</th>
+                            <th>Latest stage</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.repeatAgents.map((c) => (
+                            <tr key={c.key}>
+                              <td>{c.hot && <span className="flag-chip flag-none">Hot</span>}</td>
+                              <td>{c.name || "—"}</td>
+                              <td>
+                                <span className="nowrap">{c.mobile}</span>
+                                <div>
+                                  <a href={c.whatsapp} target="_blank" rel="noopener noreferrer" className="inline-link">
+                                    WhatsApp ↗
+                                  </a>
+                                </div>
+                              </td>
+                              <td>{c.count}</td>
+                              <td>
+                                {c.properties.slice(0, 3).join(", ")}
+                                {c.properties.length > 3 ? ` +${c.properties.length - 3} more` : ""}
+                              </td>
+                              <td className="nowrap">
+                                {c.first ? formatDate(c.first) : "—"} → {c.last ? formatDate(c.last) : "—"}
+                              </td>
+                              <td>
+                                {c.lastStage}
+                                {c.lastReason && <div className="muted small">{c.lastReason}</div>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted small">None in this period.</p>
+                  )}
+                </div>
+
+                {showLeadList && (
+                  <div className="chart-card" style={{ marginTop: "1.25rem" }}>
+                    <div className="chart-card-title">Lead list ({leadList.length})</div>
+                    <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                      Every lead matching the filters above, newest first — pick a day, a property or an enquirer type to deep-dive.
+                    </p>
+                    {leadList.length ? (
+                      <div className="table-wrap table-scroll">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Date</th>
+                              <th>Property</th>
+                              <th>Customer</th>
+                              <th>Mobile</th>
+                              <th>Source</th>
+                              <th>Who</th>
+                              <th>Stage</th>
+                              <th>Status</th>
+                              <th>Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {leadList.slice(0, 500).map((l) => (
+                              <tr key={l.id}>
+                                <td style={{ whiteSpace: "nowrap" }}>{l.enquiry_date ? formatDate(l.enquiry_date) : "—"}</td>
+                                <td>{l.property_name || "—"}</td>
+                                <td>{l.full_name && l.full_name !== "-" ? l.full_name : l.first_name || "—"}</td>
+                                <td>{l.mobile || "—"}</td>
+                                <td>{l.source_data || "—"}</td>
+                                <td>{leadType(l)}</td>
+                                <td className="nowrap">{pipelineStage(l)}</td>
+                                <td>{l.customer_status || "(blank)"}</td>
+                                <td>{l.customer_status_reason || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="muted small">No leads match these filters.</p>
+                    )}
+                    {leadList.length > 500 && (
+                      <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                        Showing the newest 500 of {leadList.length.toLocaleString()} — narrow the filters to see the rest.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
 
-            <div className="chart-card" style={{ marginTop: "1.25rem" }}>
-              <div className="chart-card-title">Repeat customers ({stats.repeatCustomers.length})</div>
-              <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                Customers (by mobile number) who enquired more than once, in the selected date range.
-              </p>
-              {stats.repeatCustomers.length ? (
-                <div className="table-wrap table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Customer</th>
-                        <th>Mobile</th>
-                        <th>Enquiries</th>
-                        <th>Properties</th>
-                        <th>First → Last</th>
-                        <th>Statuses seen</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.repeatCustomers.slice(0, 100).map((c) => (
-                        <tr key={c.mobile}>
-                          <td>{c.name || "—"}</td>
-                          <td>{c.mobile}</td>
-                          <td>{c.count}</td>
-                          <td>{c.properties.slice(0, 3).join(", ")}{c.properties.length > 3 ? ` +${c.properties.length - 3} more` : ""}</td>
-                          <td>{c.first || "—"} → {c.last || "—"}</td>
-                          <td>{c.statuses.join(", ") || "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            {activeTab === "reasons" && (
+              <div className="tab-panel">
+                <div className="dashboard-grid">
+                  <div className="chart-card">
+                    <div className="chart-card-title">Why leads drop or close</div>
+                    {stats.dropReasonsGrouped.length ? (
+                      <HBarChart data={stats.dropReasonsGrouped} />
+                    ) : (
+                      <p className="muted small">No reason data yet.</p>
+                    )}
+                  </div>
+
+                  <div className="chart-card">
+                    <div className="chart-card-title">
+                      Reasons ({stats.dropReasonsRaw.length}) — what rolled into each bucket above
+                    </div>
+                    {stats.dropReasonsRaw.length ? (
+                      <div className="table-wrap table-scroll">
+                        <table className="reason-table">
+                          <thead>
+                            <tr>
+                              <th>Reason (spelling variants merged)</th>
+                              <th>Count</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stats.dropReasonsRaw.map((r) => (
+                              <tr key={r.label}>
+                                <td>
+                                  {r.label}
+                                  {r.variants.length > 1 && (
+                                    <div className="muted small">Written as: {r.variants.map((v) => `“${v}”`).join(", ")}</div>
+                                  )}
+                                </td>
+                                <td>{r.value.toLocaleString()}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="muted small">No reason data yet.</p>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <p className="muted small">No repeat customers in this range.</p>
-              )}
-            </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -794,10 +1208,11 @@ const REASON_RULES = [
   { test: /no property name/, label: "Missing property info" },
   { test: /no match/, label: "No matching property" },
   { test: /\bagent\b/, label: "Agent lead (no follow-up needed)" },
-  { test: /wait.*reply|no reply/, label: "Awaiting customer reply" },
-  { test: /javier|schedul/, label: "Handed to Javier" },
-  { test: /not last update|not last property/, label: "Tracking not updated" },
+  { test: /schedul/, label: "Scheduled" },
   { test: /viewed/, label: "Unit viewed" },
+  { test: /javier/, label: "Let Javier follow" },
+  { test: /wait.*reply|no reply/, label: "Awaiting customer reply" },
+  { test: /not last update|not last property/, label: "Tracking not updated" },
   { test: /no need/, label: "No longer needs property" },
 ];
 
@@ -836,14 +1251,12 @@ function displayReason(n) {
 
 // Agent vs customer. Agent if the sheet's Enquirer Type says Agent, or if
 // "Agent" was written in the Reason column (how agents were noted before
-// Enquirer Type was filled in). Customer if Enquirer Type says Consumer.
-// Otherwise not specified (mostly 99.co, which has no Enquirer Type).
-const LEAD_TYPES = ["Agent", "Customer", "Not specified"];
+// Enquirer Type was filled in). Every other lead is a customer.
+const LEAD_TYPES = ["Agent", "Customer"];
 function leadType(l) {
   const et = (l.enquirer_type || "").trim().toLowerCase();
   if (et === "agent" || /\bagent\b/.test(normalizeReason(l.customer_status_reason))) return "Agent";
-  if (et === "consumer" || et === "customer") return "Customer";
-  return "Not specified";
+  return "Customer";
 }
 
 // ---------- main aggregation ----------
@@ -927,7 +1340,7 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
     const t = leadType(l);
     leadTypeCounts[t] = (leadTypeCounts[t] || 0) + 1;
     const src = (l.source_data || "").trim() || "(blank)";
-    typeBySource[src] = typeBySource[src] || { source: src, Agent: 0, Customer: 0, "Not specified": 0, total: 0 };
+    typeBySource[src] = typeBySource[src] || { source: src, Agent: 0, Customer: 0, total: 0 };
     typeBySource[src][t]++;
     typeBySource[src].total++;
   }
@@ -935,7 +1348,6 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
   const leadTypeBySource = Object.values(typeBySource).sort((a, b) => b.total - a.total);
 
   const propertyTable = computePropertyTable(filteredLeads);
-  const repeatCustomers = computeRepeatCustomers(filteredLeads);
   const dailyTrend = dailySeries(chartLeads, yearFilter, monthFilter, now);
   const dailyStats = summarizeDaily(dailyTrend);
 
@@ -952,11 +1364,17 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
     dropReasonsRaw,
     needsFollowUp,
     propertyTable,
-    repeatCustomers,
     dailyTrend,
     dailyStats,
     leadTypes,
     leadTypeBySource,
+    platforms: computePlatformScorecard(filteredLeads),
+    pipeline: computePipeline(filteredLeads, false),
+    customerPipeline: computePipeline(filteredLeads, true),
+    pipelineByProperty: computePipelineByProperty(filteredLeads),
+    weekdays: computeWeekdays(filteredLeads),
+    repeatCustomers: computeRepeatPeople(filteredLeads, now, "Customer"),
+    repeatAgents: computeRepeatPeople(filteredLeads, now, "Agent"),
   };
 }
 
@@ -976,9 +1394,12 @@ function computeAttention(properties, filteredLeads, allLeads, linksByName, sear
     (p) => p.property_name && statusKey(p.property_status) === "active" && (!q || p.property_name.toLowerCase().includes(q))
   );
   const counts = {};
+  const custCounts = {};
   for (const l of filteredLeads) {
     const k = (l.property_name || "").trim().toLowerCase();
-    if (k) counts[k] = (counts[k] || 0) + 1;
+    if (!k) continue;
+    counts[k] = (counts[k] || 0) + 1;
+    if (leadType(l) === "Customer") custCounts[k] = (custCounts[k] || 0) + 1;
   }
   const lastEnquiry = {};
   for (const l of allLeads) {
@@ -991,8 +1412,10 @@ function computeAttention(properties, filteredLeads, allLeads, linksByName, sear
       id: p.id,
       name: p.property_name.trim(),
       count: counts[k] || 0,
+      customers: custCounts[k] || 0,
+      agents: (counts[k] || 0) - (custCounts[k] || 0),
       lastEnquiry: lastEnquiry[k] || null,
-      links: sortLinksByPriority(parseCompiledLinks(linksByName[k] || "")),
+      links: sortLinksByPriority(mergeLinks(parseCompiledLinks(linksByName[k] || ""), [])),
     };
   });
   const sortedCounts = rows.map((r) => r.count).sort((a, b) => a - b);
@@ -1004,6 +1427,194 @@ function computeAttention(properties, filteredLeads, allLeads, linksByName, sear
     .filter((r) => r.flag)
     .sort((a, b) => a.count - b.count || (a.lastEnquiry || "").localeCompare(b.lastEnquiry || ""));
   return { rows: flagged, activeCount: n, median };
+}
+
+// ---------- insights ----------
+
+const isExpiredReason = (l) => /expired/.test(normalizeReason(l.customer_status_reason));
+
+// Your pipeline, in order. Every lead lands in exactly one stage, so the
+// stages always add up to the total. What you wrote in the Reason column
+// wins over the status: anything mentioning scheduling is Scheduled (even
+// "Scheduled, let Javier follow"), then Viewed, then Let Javier follow;
+// everything else falls back to its status.
+const PIPELINE_STAGES = ["Scheduled", "Viewed", "Let Javier follow", "Follow-up", "Pending", "Check", "Drop", "(blank)"];
+function pipelineStage(l) {
+  const n = normalizeReason(l.customer_status_reason);
+  if (/schedul/.test(n)) return "Scheduled";
+  if (/viewed/.test(n)) return "Viewed";
+  if (/javier/.test(n)) return "Let Javier follow";
+  const s = statusKey(l.customer_status);
+  if (s === "followup") return "Follow-up";
+  if (s === "pending") return "Pending";
+  if (s === "check") return "Check";
+  if (s === "drop") return "Drop";
+  return "(blank)";
+}
+function emptyStages() {
+  const o = {};
+  for (const s of PIPELINE_STAGES) o[s] = 0;
+  return o;
+}
+// Rates are measured on customers. Schedule rate counts Scheduled + Viewed
+// (a viewing was scheduled first), View rate counts Viewed.
+function pipelineRates(stages, base) {
+  const pct = (n) => (base ? Math.round((n / base) * 1000) / 10 : null);
+  return {
+    scheduleRate: pct(stages["Scheduled"] + stages["Viewed"]),
+    viewRate: pct(stages["Viewed"]),
+    javierRate: pct(stages["Let Javier follow"]),
+    dropRate: pct(stages["Drop"]),
+  };
+}
+function computePipeline(leads, customersOnly) {
+  const stages = emptyStages();
+  let base = 0;
+  for (const l of leads) {
+    if (customersOnly && leadType(l) !== "Customer") continue;
+    stages[pipelineStage(l)]++;
+    base++;
+  }
+  return {
+    total: base,
+    stages: PIPELINE_STAGES.map((s) => ({ label: s, value: stages[s], pct: base ? Math.round((stages[s] / base) * 100) : 0 })),
+    ...pipelineRates(stages, base),
+  };
+}
+
+// 1) Leads lost because the listing had expired — read from your
+// "Property expired" note (made when you checked 5+ days after the welcome
+// message), not from Property_status, which is a live lookup and always
+// shows today's status rather than the status at the time.
+function computeExpiredDemand(filteredLeads, allLeads, now, linksByName) {
+  const cutoffKey = dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30));
+  const map = {};
+  for (const l of filteredLeads) {
+    const name = (l.property_name || "").trim();
+    if (!name || !isExpiredReason(l)) continue;
+    const k = name.toLowerCase();
+    const r = (map[k] = map[k] || { name, lost: 0, customers: 0, agents: 0, last30: 0, last: null });
+    r.lost++;
+    if (leadType(l) === "Customer") r.customers++;
+    else r.agents++;
+    if (l.enquiry_date && l.enquiry_date >= cutoffKey) r.last30++;
+    if (l.enquiry_date && (!r.last || l.enquiry_date > r.last)) r.last = l.enquiry_date;
+  }
+  const rows = Object.entries(map)
+    .map(([k, r]) => ({ ...r, links: sortLinksByPriority(mergeLinks(parseCompiledLinks(linksByName[k] || ""), [])) }))
+    .sort((a, b) => b.customers - a.customers || b.lost - a.lost);
+  const lost = rows.reduce((s, r) => s + r.lost, 0);
+  const lostCustomers = rows.reduce((s, r) => s + r.customers, 0);
+  const customers = filteredLeads.filter((l) => leadType(l) === "Customer").length;
+  return {
+    rows,
+    lost,
+    lostCustomers,
+    share: filteredLeads.length ? Math.round((lost / filteredLeads.length) * 100) : 0,
+    customerShare: customers ? Math.round((lostCustomers / customers) * 100) : 0,
+  };
+}
+
+// 2) One row per platform, measured on customers: how many reach each
+// stage of your pipeline.
+function computePlatformScorecard(filteredLeads) {
+  const total = filteredLeads.length;
+  const map = {};
+  for (const l of filteredLeads) {
+    const src = (l.source_data || "").trim() || "(blank)";
+    const r = (map[src] = map[src] || { source: src, leads: 0, customers: 0, expired: 0, stages: emptyStages() });
+    r.leads++;
+    if (leadType(l) !== "Customer") continue;
+    r.customers++;
+    r.stages[pipelineStage(l)]++;
+    if (isExpiredReason(l)) r.expired++;
+  }
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : null);
+  return Object.values(map)
+    .map((r) => ({
+      ...r,
+      share: pct(r.leads, total),
+      customerPct: pct(r.customers, r.leads),
+      expiredPct: pct(r.expired, r.customers),
+      ...pipelineRates(r.stages, r.customers),
+    }))
+    .sort((a, b) => b.leads - a.leads);
+}
+
+// 3) Pipeline per property (customers only), best at getting viewings first.
+function computePipelineByProperty(filteredLeads) {
+  const map = {};
+  for (const l of filteredLeads) {
+    if (leadType(l) !== "Customer") continue;
+    const name = (l.property_name || "").trim();
+    if (!name) continue;
+    const p = (map[name] = map[name] || { name, customers: 0, stages: emptyStages() });
+    p.customers++;
+    p.stages[pipelineStage(l)]++;
+  }
+  return Object.values(map)
+    .filter((p) => p.customers >= 3)
+    .map((p) => ({ ...p, ...pipelineRates(p.stages, p.customers) }))
+    .sort(
+      (a, b) =>
+        b.stages["Scheduled"] + b.stages["Viewed"] - (a.stages["Scheduled"] + a.stages["Viewed"]) ||
+        b.stages["Viewed"] - a.stages["Viewed"] ||
+        b.customers - a.customers
+    );
+}
+
+// 5) Average leads per weekday. Divided by how many of that weekday fall
+// in the period, so a month with five Mondays doesn't flatter Monday.
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function computeWeekdays(filteredLeads) {
+  const dated = filteredLeads.filter((l) => l.enquiry_date);
+  if (!dated.length) return [];
+  const toIdx = (d) => (d.getDay() + 6) % 7; // Monday = 0
+  const counts = [0, 0, 0, 0, 0, 0, 0];
+  const keys = dated.map((l) => l.enquiry_date).sort();
+  for (const k of keys) counts[toIdx(new Date(k + "T00:00:00"))]++;
+  const occurrences = [0, 0, 0, 0, 0, 0, 0];
+  for (let d = new Date(keys[0] + "T00:00:00"), end = new Date(keys[keys.length - 1] + "T00:00:00"); d <= end; d = addDays(d, 1))
+    occurrences[toIdx(d)]++;
+  return WEEKDAYS.map((label, i) => ({
+    label,
+    value: occurrences[i] ? Math.round((counts[i] / occurrences[i]) * 10) / 10 : 0,
+    total: counts[i],
+  }));
+}
+
+// 6) People who enquired more than once, matched by mobile number — run
+// separately for customers and for agents. "Hot" = 3+ enquiries, or 2+
+// with the latest in the last 14 days.
+function computeRepeatPeople(filteredLeads, now, type) {
+  const map = {};
+  for (const l of filteredLeads) {
+    if (leadType(l) !== type) continue;
+    const key = (l.mobile || "").replace(/\D/g, "");
+    if (key.length < 6) continue;
+    const c = (map[key] = map[key] || { key, mobile: (l.mobile || "").trim(), name: "", count: 0, properties: new Set(), first: null, last: null, lastStage: "", lastReason: "" });
+    c.count++;
+    const nm = l.full_name && l.full_name.trim() !== "-" ? l.full_name.trim() : (l.first_name || "").trim();
+    if (!c.name && nm) c.name = nm;
+    if (l.property_name) c.properties.add(l.property_name.trim());
+    if (l.enquiry_date) {
+      if (!c.first || l.enquiry_date < c.first) c.first = l.enquiry_date;
+      if (!c.last || l.enquiry_date >= c.last) {
+        c.last = l.enquiry_date;
+        c.lastStage = pipelineStage(l);
+        c.lastReason = (l.customer_status_reason || "").trim();
+      }
+    }
+  }
+  return Object.values(map)
+    .filter((c) => c.count >= 2)
+    .map((c) => ({
+      ...c,
+      properties: Array.from(c.properties),
+      hot: c.count >= 3 || (c.last ? daysSince(c.last, now) <= 14 : false),
+      whatsapp: `https://wa.me/${c.key.length === 8 ? "65" + c.key : c.key}`,
+    }))
+    .sort((a, b) => b.hot - a.hot || b.count - a.count || (b.last || "").localeCompare(a.last || ""));
 }
 
 // Average / median / min / max leads per day across the days plotted
@@ -1129,9 +1740,11 @@ function computePropertyTable(leads) {
   for (const l of leads) {
     const name = (l.property_name || "").trim();
     if (!name) continue;
-    if (!map[name]) map[name] = { property_name: name, total: 0, drop: 0, followUp: 0, pending: 0, check: 0, links: new Set() };
+    if (!map[name]) map[name] = { property_name: name, total: 0, customers: 0, agents: 0, drop: 0, followUp: 0, pending: 0, check: 0, links: new Set() };
     const row = map[name];
     row.total++;
+    if (leadType(l) === "Customer") row.customers++;
+    else row.agents++;
     const status = (l.customer_status || "").trim();
     const k = statusKey(status);
     if (k === "drop") row.drop++;

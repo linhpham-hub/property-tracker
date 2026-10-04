@@ -85,9 +85,9 @@ export default function LineChart({
               strokeDasharray="4 4"
             />
             <text
-              x={width - padding.right}
+              x={padding.left + 28}
               y={yFor(refValue) - 5}
-              textAnchor="end"
+              textAnchor="start"
               className="chart-tick"
               stroke="var(--paper-raised)"
               strokeWidth="3"
