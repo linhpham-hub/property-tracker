@@ -1468,3 +1468,115 @@ details.chart-card[open] summary::before {
   width: 0.9rem;
   color: var(--ink-soft);
 }
+
+/* Agent dashboard */
+.answer-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--navy);
+  border-radius: 10px;
+  padding: 1rem 1.2rem;
+  margin-bottom: 0.5rem;
+}
+
+.answer-title {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--heading);
+  margin-bottom: 0.4rem;
+}
+
+.answer-list {
+  margin: 0 0 0.6rem 1.1rem;
+  padding: 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.priority-chips {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.6rem;
+}
+
+.priority-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  text-align: left;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.priority-chip:hover {
+  background: var(--paper);
+  border-color: var(--brass-dark);
+}
+
+.priority-chip-on {
+  border-color: var(--navy);
+  box-shadow: inset 0 0 0 1px var(--navy);
+}
+
+.priority-chip-value {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-weight: 600;
+  font-size: 1.3rem;
+  color: var(--heading);
+}
+
+.priority-chip-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+  .priority-chips {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.share-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 120px;
+}
+
+.share-bar-track {
+  flex: 1;
+  height: 8px;
+  background: var(--paper);
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.share-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--navy);
+  border-radius: 0 4px 4px 0;
+}
+
+.share-bar-num {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  min-width: 2.8rem;
+  text-align: right;
+}
+
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover td {
+  background: var(--paper);
+}

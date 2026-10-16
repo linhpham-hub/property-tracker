@@ -839,6 +839,70 @@ export default function DashboardPage() {
             {activeTab === "pipeline" && (
               <div className="tab-panel">
                 <div className="chart-card">
+                  <div className="chart-card-title">PropertyGuru: lead to close</div>
+                  <p className="muted small" style={{ marginBottom: "0.9rem" }}>
+                    PropertyGuru leads only. Each step counts everyone who got that far or further, so a viewed customer is also
+                    counted as scheduled. <strong>Closed</strong> = the listing is now Expired in Property_master (sold or rented).
+                    The sheet doesn&apos;t record which person took the unit, so Closed counts customers who viewed a listing that
+                    has since closed.
+                  </p>
+                  <div className="funnel">
+                    {stats.closeFunnel.steps.map((st) => (
+                      <div className="funnel-row" key={st.label}>
+                        <div className="funnel-label">
+                          <span className="funnel-name">{st.label}</span>
+                          <span className="muted small">{st.hint}</span>
+                        </div>
+                        <div className="funnel-track">
+                          <div className="funnel-bar" style={{ width: `${st.value ? Math.max(st.pct, 0.8) : 0}%` }} />
+                        </div>
+                        <div className="funnel-num">
+                          <strong>{st.value.toLocaleString()}</strong>
+                          <span className="muted small">
+                            {st.pct}% of leads{st.stepPct !== null ? ` · ${st.stepPct}% of previous` : ""}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="muted small" style={{ marginTop: "0.9rem" }}>
+                    Listings: {stats.closeFunnel.listingsWithLeads} had PropertyGuru leads in this period;{" "}
+                    <strong>{stats.closeFunnel.closedCount} are now closed</strong>, and{" "}
+                    <strong>{stats.closeFunnel.closedWithViewing}</strong> of those had a viewing from your leads. The rest most
+                    likely closed through another channel (co-broke agent, Javier&apos;s own contacts, another platform).
+                  </p>
+                  {stats.closeFunnel.closedListings.length > 0 && (
+                    <details style={{ marginTop: "0.6rem" }}>
+                      <summary className="small">Closed listings ({stats.closeFunnel.closedCount})</summary>
+                      <div className="table-wrap table-scroll" style={{ marginTop: "0.6rem" }}>
+                        <table className="scorecard-table">
+                          <thead>
+                            <tr>
+                              <th>Closed listing</th>
+                              <th>Leads</th>
+                              <th>Customers</th>
+                              <th>Scheduled</th>
+                              <th>Viewed</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stats.closeFunnel.closedListings.map((p) => (
+                              <tr key={p.name}>
+                                <td>{p.name}</td>
+                                <td>{p.leads}</td>
+                                <td>{p.customers}</td>
+                                <td>{p.scheduled || <span className="muted">0</span>}</td>
+                                <td>{p.viewed ? <strong>{p.viewed}</strong> : <span className="muted">0</span>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
+                </div>
+
+                <div className="chart-card">
                   <div className="chart-card-title">
                     Customer pipeline ({stats.customerPipeline.total.toLocaleString()} customers)
                   </div>
@@ -1459,6 +1523,7 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
     pipeline: computePipeline(filteredLeads, false),
     customerPipeline: computePipeline(filteredLeads, true),
     pipelineByProperty: computePipelineByProperty(filteredLeads),
+    closeFunnel: computeCloseFunnel(filteredLeads),
     weekdays: computeWeekdays(filteredLeads),
     repeatCustomers: computeRepeatPeople(filteredLeads, now, "Customer"),
     repeatAgents: computeRepeatPeople(filteredLeads, now, "Agent"),
@@ -1584,6 +1649,57 @@ function computePipeline(leads, customersOnly) {
       .map(([label, value]) => ({ label, value, pct: pendingTotal ? Math.round((value / pendingTotal) * 100) : 0 }))
       .sort((a, b) => b.value - a.value),
     ...pipelineRates(stages, base),
+  };
+}
+
+// PropertyGuru leads, lead to close. Each step counts everyone who reached
+// it or went further (a viewed customer was also scheduled), so the bars
+// only get shorter. "Closed" = the listing's Property_status is Expired —
+// Javier never takes a listing down for credits, so Expired means it was
+// sold or rented. The sheet doesn't say WHICH lead took it, so a closed
+// lead here is a customer who viewed a listing that has since closed.
+const isClosedListing = (l) => statusKey(l.property_status) === "expired";
+function computeCloseFunnel(filteredLeads) {
+  const pg = filteredLeads.filter((l) => /guru/i.test(l.source_data || ""));
+  const customers = pg.filter((l) => leadType(l) === "Customer");
+  const scheduled = customers.filter((l) => ["Scheduled", "Viewed"].includes(pipelineStage(l)) || /viewed/.test(normalizeReason(l.customer_status_reason)));
+  const viewed = customers.filter((l) => /viewed/.test(normalizeReason(l.customer_status_reason)));
+  const closed = viewed.filter(isClosedListing);
+  const steps = [
+    { label: "Leads", hint: "source PropertyGuru", value: pg.length },
+    { label: "Customers", hint: "not agents", value: customers.length },
+    { label: "Scheduled", hint: "note says scheduled or viewed", value: scheduled.length },
+    { label: "Viewed", hint: "note says viewed", value: viewed.length },
+    { label: "Closed", hint: "viewed, listing now Expired", value: closed.length },
+  ].map((s, i, arr) => ({
+    ...s,
+    pct: pg.length ? Math.round((s.value / pg.length) * 1000) / 10 : 0,
+    stepPct: i && arr[i - 1].value ? Math.round((s.value / arr[i - 1].value) * 1000) / 10 : null,
+  }));
+
+  // Listing view: every listing with PG leads in the period that is now closed.
+  const map = {};
+  for (const l of pg) {
+    const name = (l.property_name || "").trim();
+    if (!name) continue;
+    const p = (map[name] = map[name] || { name, closed: false, leads: 0, customers: 0, scheduled: 0, viewed: 0 });
+    if (isClosedListing(l)) p.closed = true;
+    p.leads++;
+    if (leadType(l) !== "Customer") continue;
+    p.customers++;
+    if (scheduled.includes(l)) p.scheduled++;
+    if (viewed.includes(l)) p.viewed++;
+  }
+  const listings = Object.values(map);
+  const closedListings = listings
+    .filter((p) => p.closed)
+    .sort((a, b) => b.viewed - a.viewed || b.scheduled - a.scheduled || b.customers - a.customers);
+  return {
+    steps,
+    listingsWithLeads: listings.length,
+    closedCount: closedListings.length,
+    closedWithViewing: closedListings.filter((p) => p.viewed > 0).length,
+    closedListings,
   };
 }
 

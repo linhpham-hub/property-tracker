@@ -15,7 +15,8 @@ export default function Navbar({ profile }) {
         Property Tracker
       </Link>
       <div className="nav-links">
-        <Link href="/dashboard">Dashboard</Link>
+        <Link href="/dashboard">Lead dashboard</Link>
+        <Link href="/agents">Agent dashboard</Link>
         {canEdit && <Link href="/property/new">+ Add property</Link>}
         {canEdit && <Link href="/import">Import CSV</Link>}
         <span className={`role-pill role-${profile?.role}`}>{profile?.role}</span>

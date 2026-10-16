@@ -66,7 +66,7 @@ export default function BarChart({ data, height = 220, valueFormat = (v) => v.to
               />
               <path
                 d={roundedTopBar(x, y, barWidth, Math.max(barH, 1), radius)}
-                fill={hovered ? "var(--heading)" : "var(--navy)"}
+                fill={hovered ? "var(--heading)" : d.muted ? "var(--brass)" : "var(--navy)"}
                 style={{ transition: "fill 0.1s ease" }}
                 pointerEvents="none"
               />
