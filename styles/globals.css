@@ -1,21 +1,72 @@
 @import url("https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=Inter:wght@400;500;600&display=swap");
 
 :root {
-  --ink: #3d151d;           /* primary text - dark, high contrast on light bg */
-  --ink-soft: #7a4550;      /* secondary/muted text - still readable */
-  --paper: #fff5f5;
-  --paper-raised: #ffffff;
-  --line: #f0c9d0;
-  --heading: #8a2a3e;       /* deep rose for headings/links - distinct from button fill */
-  --navy: #b3495a;          /* button/accent fill (white text sits on this) */
-  --navy-dark: #93394a;     /* hover state for buttons */
-  --brass: #e2b4bd;
-  --brass-dark: #c07c8c;
-  --green: #3f7355;
-  --green-bg: #e3f0e7;
-  --grey-bg: #f7d6d0;
+  /* Site base — "stone & ink": warm limestone paper, near-black ink with a
+     green undertone, graphite-moss accent. Calm and neutral so each
+     dashboard's own colour stands out. */
+  --ink: #1e2622;           /* primary text */
+  --ink-soft: #5d6660;      /* secondary/muted text */
+  --paper: #f3f1ec;         /* page background */
+  --paper-raised: #fcfbf8;  /* cards */
+  --line: #ddd8ce;
+  --heading: #2c3a33;       /* headings/links */
+  --navy: #3e5247;          /* button/accent fill (white text sits on this) */
+  --navy-dark: #2c3a33;     /* hover */
+  --brass: #c9cfc2;         /* muted fill (secondary bars) */
+  --brass-dark: #95a091;
+  --green: #2f6b4a;
+  --green-bg: #e1eee5;
+  --grey-bg: #e8e4da;       /* table headers, chips */
   --red: #a3403a;
-  --red-bg: #fbe4e1;
+  --red-bg: #f7e3df;
+  --placeholder: #a29c90;
+  --tooltip-sub: #d9ddd6;
+  --warn: #8a6414;
+  --warn-bg: #f6ecd2;
+}
+
+/* Lead dashboard — "petrol": deep blue-green of oiled steel / harbour
+   water, with sea-glass tints. Cool and analytical. */
+.theme-lead {
+  --ink: #142629;
+  --ink-soft: #4f6567;
+  --paper: #eef3f2;
+  --paper-raised: #fbfdfc;
+  --line: #cfdedc;
+  --heading: #0d4549;
+  --navy: #13666b;
+  --navy-dark: #0d4c50;
+  --brass: #a7cdc8;
+  --brass-dark: #5f9c97;
+  --grey-bg: #dceae7;
+  --placeholder: #8fa5a3;
+  --tooltip-sub: #cfe3e0;
+}
+
+/* Agent dashboard — "burnished copper": oxidised copper and terracotta,
+   warm and outward-facing for outreach work. */
+.theme-agent {
+  --ink: #2a1a12;
+  --ink-soft: #6e5547;
+  --paper: #f6f0e8;
+  --paper-raised: #fffcf8;
+  --line: #e8d8c6;
+  --heading: #7a3415;
+  --navy: #a9531f;
+  --navy-dark: #85401a;
+  --brass: #eac3a1;
+  --brass-dark: #c98a5c;
+  --grey-bg: #f1e2d1;
+  --placeholder: #b39a87;
+  --tooltip-sub: #f0dccb;
+}
+
+.theme-lead,
+.theme-agent {
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  border-top: 4px solid var(--navy);
 }
 
 * {
@@ -86,7 +137,7 @@ textarea {
 
 input::placeholder,
 textarea::placeholder {
-  color: #b98d95;
+  color: var(--placeholder);
 }
 
 textarea {
@@ -401,8 +452,8 @@ button.link-btn:hover {
 }
 
 .status-pending {
-  background: #fdf0d5;
-  color: #96701a;
+  background: var(--warn-bg);
+  color: var(--warn);
 }
 
 /* List view */
@@ -1052,7 +1103,7 @@ th {
 }
 
 .chart-tooltip span {
-  color: #f0d7dc;
+  color: var(--tooltip-sub);
 }
 
 .reason-table td:last-child,
@@ -1366,7 +1417,7 @@ details.chart-card[open] summary::before {
 
 .funnel-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) 2fr minmax(110px, auto);
+  grid-template-columns: minmax(180px, 1.1fr) 2fr 170px;
   align-items: center;
   gap: 1rem;
 }
@@ -1400,6 +1451,46 @@ details.chart-card[open] summary::before {
   flex-direction: column;
   align-items: flex-end;
   text-align: right;
+}
+
+.funnel-section {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 0.35rem 0 0.15rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.funnel-row-branch .funnel-label {
+  padding-left: 1rem;
+}
+
+.funnel-row-branch .funnel-name {
+  font-weight: 500;
+}
+
+.funnel-row-branch .funnel-bar {
+  background: var(--brass);
+}
+
+.funnel-compact {
+  gap: 0.45rem;
+}
+
+.funnel-compact .funnel-row {
+  grid-template-columns: minmax(130px, 1fr) 2fr 150px;
+  gap: 0.6rem;
+}
+
+.funnel-compact .funnel-track {
+  height: 16px;
+}
+
+.funnel-compact .funnel-name {
+  font-size: 0.82rem;
 }
 
 @media (max-width: 640px) {
@@ -1437,7 +1528,7 @@ details.chart-card[open] summary::before {
 
 .rate-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 0.5rem;
   margin-bottom: 1rem;
   padding-bottom: 0.9rem;
@@ -1579,4 +1670,33 @@ details.chart-card[open] summary::before {
 
 .clickable-row:hover td {
   background: var(--paper);
+}
+
+/* Javier's own agency, pinned in the Agencies table */
+.home-row td {
+  background: var(--paper);
+  border-top: 2px solid var(--navy);
+  border-bottom: 2px solid var(--navy);
+}
+
+.batch-input {
+  width: 6.5rem;
+}
+
+/* Two cards stacked in one grid column */
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.card-stack > .chart-card {
+  margin: 0;
+}
+
+.column-notes {
+  margin: 0 0 0.9rem;
+  padding-left: 1.1rem;
+}
+.column-notes li {
+  margin-bottom: 0.15rem;
 }

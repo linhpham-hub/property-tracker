@@ -7,6 +7,7 @@ import BarChart from "../components/charts/BarChart";
 import LineChart from "../components/charts/LineChart";
 import HBarChart from "../components/charts/HBarChart";
 import DonutChart from "../components/charts/DonutChart";
+import FunnelChart from "../components/charts/FunnelChart";
 
 const DAY = 24 * 60 * 60 * 1000;
 const MATURE_DAYS = 5; // your own follow-up rule: judge a lead only once it's had 5+ days
@@ -16,9 +17,9 @@ const STORAGE_KEY = "property-tracker-lead-dashboard-state";
 // Overview carries the views you check most; the rest are deep dives.
 const DASHBOARD_TABS = [
   { key: "overview", label: "Overview" },
+  { key: "pipeline", label: "Pipeline" },
   { key: "listings", label: "Listings" },
   { key: "platforms", label: "Platforms & timing" },
-  { key: "pipeline", label: "Pipeline" },
   { key: "people", label: "People" },
   { key: "reasons", label: "Reasons" },
 ];
@@ -48,6 +49,7 @@ export default function DashboardPage() {
   const [enquirerFilter, setEnquirerFilter] = useState(
     LEAD_TYPES.includes(saved.enquirerFilter) ? saved.enquirerFilter : "all"
   );
+  const [sourceFilter, setSourceFilter] = useState(saved.sourceFilter || "all");
   const [propertySearch, setPropertySearch] = useState(saved.propertySearch || "");
   const [closedReasonGroups, setClosedReasonGroups] = useState({});
   const [activeTab, setActiveTab] = useState(
@@ -59,10 +61,10 @@ export default function DashboardPage() {
     try {
       sessionStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch, activeTab })
+        JSON.stringify({ yearFilter, monthFilter, dayFilter, enquirerFilter, sourceFilter, propertySearch, activeTab })
       );
     } catch (e) {}
-  }, [yearFilter, monthFilter, dayFilter, enquirerFilter, propertySearch, activeTab]);
+  }, [yearFilter, monthFilter, dayFilter, enquirerFilter, sourceFilter, propertySearch, activeTab]);
 
   // A day only means something inside one specific month.
   useEffect(() => {
@@ -170,18 +172,28 @@ export default function DashboardPage() {
   const now = useMemo(() => new Date(), [leads]); // recompute "today" each time data reloads
   const availableYears = useMemo(() => getAvailableYears(leads), [leads]);
   const enquirerOptions = LEAD_TYPES;
+  // Platforms present in the data (Source_data column), biggest first.
+  const sourceOptions = useMemo(() => {
+    const c = {};
+    for (const l of leads) {
+      const k = sourceOf(l);
+      c[k] = (c[k] || 0) + 1;
+    }
+    return Object.keys(c).sort((a, b) => c[b] - c[a]);
+  }, [leads]);
   const daysInMonth =
     yearFilter !== "all" && monthFilter !== "all" ? new Date(Number(yearFilter), Number(monthFilter) + 1, 0).getDate() : 0;
 
-  // Everything except the date: enquirer type + property search.
+  // Everything except the date: enquirer type + source + property search.
   const nonDateFiltered = useMemo(() => {
     const q = propertySearch.trim().toLowerCase();
     return leads.filter((l) => {
       if (enquirerFilter !== "all" && leadType(l) !== enquirerFilter) return false;
+      if (sourceFilter !== "all" && sourceOf(l) !== sourceFilter) return false;
       if (q && !(l.property_name || "").toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [leads, enquirerFilter, propertySearch]);
+  }, [leads, enquirerFilter, sourceFilter, propertySearch]);
   // Leads per day always plots the whole month (so picking one day doesn't
   // collapse it to a single dot) — everything else narrows to the day.
   const monthScopedLeads = useMemo(
@@ -236,7 +248,7 @@ export default function DashboardPage() {
   if (loading || !profile) return <div className="loading-screen">Loading…</div>;
 
   return (
-    <div>
+    <div className="theme-lead">
       <Navbar profile={profile} />
       <div className="page">
         <div className="page-header">
@@ -305,19 +317,29 @@ export default function DashboardPage() {
                   </option>
                 ))}
               </select>
+              <span className="muted small">Source:</span>
+              <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+                <option value="all">All</option>
+                {sourceOptions.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
               <input
                 className="table-search"
                 placeholder="Search property…"
                 value={propertySearch}
                 onChange={(e) => setPropertySearch(e.target.value)}
               />
-              {(dayFilter !== "all" || enquirerFilter !== "all" || propertySearch) && (
+              {(dayFilter !== "all" || enquirerFilter !== "all" || sourceFilter !== "all" || propertySearch) && (
                 <button
                   type="button"
                   className="link-button small"
                   onClick={() => {
                     setDayFilter("all");
                     setEnquirerFilter("all");
+                    setSourceFilter("all");
                     setPropertySearch("");
                   }}
                 >
@@ -455,35 +477,50 @@ export default function DashboardPage() {
 
                 <div className="dashboard-grid">
                   <div className="chart-card">
-                    <div className="chart-card-title">Pipeline ({stats.pipeline.total.toLocaleString()} leads)</div>
-                    {stats.pipeline.total ? (
-                      <HBarChart data={stats.pipeline.stages} />
+                    <div className="chart-card-title">
+                      Customer funnel ({stats.customerFunnel.total.toLocaleString()} customers of{" "}
+                      {stats.customerFunnel.leads.toLocaleString()} leads)
+                    </div>
+                    {stats.customerFunnel.total ? (
+                      <FunnelChart steps={stats.customerFunnel.steps} compact />
                     ) : (
-                      <p className="muted small">No leads in this range.</p>
+                      <p className="muted small">No customer leads in this range.</p>
                     )}
-                    <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                      In pipeline order; every lead is in exactly one stage. Scheduled / Viewed come from your
-                      Reason note (scheduling wins, e.g. "Scheduled, let Javier follow" = Scheduled); a "let Javier follow" note
-                      counts as Pending; the rest from Status.
+                    <p className="muted small" style={{ marginTop: "0.6rem" }}>
+                      Customers only — every % is of customers. &quot;Stopped here&quot; = where the rest sit now; &quot;Moved
+                      forward&quot; counts everyone who got that far or further. Optioned / Expired (still listing) / Closed
+                      come from the listing&apos;s status in Property_master for customers who viewed it.{" "}
+                      <button type="button" className="link-button small" onClick={() => setActiveTab("pipeline")}>
+                        Full pipeline →
+                      </button>
                     </p>
-                    {stats.pipeline.pendingBreakdown.length > 0 && (
-                      <p className="small" style={{ marginTop: "0.4rem" }}>
-                        <strong>Pending:</strong>{" "}
-                        {stats.pipeline.pendingBreakdown.map((g) => `${g.label} ${g.value}`).join(" · ")}
-                      </p>
-                    )}
                   </div>
 
-                  <div className="chart-card">
-                    <div className="chart-card-title">Agent vs customer</div>
-                    {stats.leadTypes.length ? (
-                      <DonutChart data={stats.leadTypes} />
-                    ) : (
-                      <p className="muted small">No leads in this range.</p>
-                    )}
-                    <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                      Agent = Enquirer Type "Agent", or "Agent" written in the Reason column. Customer = every other lead.
-                    </p>
+                  <div className="card-stack">
+                    <div className="chart-card">
+                      <div className="chart-card-title">Average leads per weekday</div>
+                      {stats.weekdays.length ? (
+                        <BarChart data={stats.weekdays} height={190} valueFormat={(v) => v.toFixed(1)} />
+                      ) : (
+                        <p className="muted small">No dated leads in this period.</p>
+                      )}
+                      <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                        Leads ÷ how many of that weekday fall in the selected period.
+                      </p>
+                    </div>
+
+                    <div className="chart-card">
+                      <div className="chart-card-title">Agent vs customer</div>
+                      {stats.leadTypes.length ? (
+                        <DonutChart data={stats.leadTypes} />
+                      ) : (
+                        <p className="muted small">No leads in this range.</p>
+                      )}
+                      <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                        Agent = Enquirer Type &quot;Agent&quot;, or &quot;Agent&quot; written in the Reason column. Customer =
+                        every other lead.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -501,7 +538,7 @@ export default function DashboardPage() {
 
                   <div className="chart-card">
                     <div className="chart-card-title">
-                      Top {stats.topPropertiesByStatus.expired.length} most-enquired properties — Expired
+                      Top {stats.topPropertiesByStatus.expired.length} most-enquired properties — Optioned / Expired
                     </div>
                     {stats.topPropertiesByStatus.expired.length ? (
                       <HBarChart data={stats.topPropertiesByStatus.expired} />
@@ -720,13 +757,30 @@ export default function DashboardPage() {
                   {filteredPropertyRows.length === 0 && <p className="muted small">No properties match.</p>}
                 </div>
 
-                <div className="chart-card">
-                  <div className="chart-card-title">Property type interest</div>
-                  {stats.propertyType.length ? (
-                    <BarChart data={stats.propertyType} />
-                  ) : (
-                    <p className="muted small">No property type data yet.</p>
-                  )}
+                <div className="dashboard-grid">
+                  <div className="chart-card">
+                    <div className="chart-card-title">Property type interest</div>
+                    {stats.propertyType.length ? (
+                      <BarChart data={stats.propertyType} />
+                    ) : (
+                      <p className="muted small">No property type data yet.</p>
+                    )}
+                    <p className="muted small" style={{ marginTop: "0.5rem" }}>Total leads per property type.</p>
+                  </div>
+
+                  <div className="chart-card">
+                    <div className="chart-card-title">Demand per listing, by property type</div>
+                    {stats.demandByType.length ? (
+                      <BarChart data={stats.demandByType} valueFormat={(v) => v.toFixed(1)} />
+                    ) : (
+                      <p className="muted small">No property type data yet.</p>
+                    )}
+                    <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                      Average leads per listing = leads ÷ number of listings of that type that got enquiries. A type with
+                      few listings but high demand per listing is where one more listing would pay off most. Hover for the
+                      counts.
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
@@ -737,7 +791,8 @@ export default function DashboardPage() {
                   <div className="chart-card-title">Platform scorecard</div>
                   <p className="muted small" style={{ marginBottom: "0.75rem" }}>
                     Pipeline counts and rates are for customers only (agents excluded). Each customer is in one stage, in your
-                    pipeline order. Schedule rate = Scheduled + Viewed; Drop rate = stage Drop.
+                    pipeline order. Rates count everyone who got that far or further (Schedule rate = scheduled, viewed, optioned or
+                    closed); Drop rate = stopped at Drop.
                   </p>
                   <div className="table-wrap">
                     <table className="scorecard-table">
@@ -747,11 +802,12 @@ export default function DashboardPage() {
                           <th>Leads</th>
                           <th>Customers</th>
                           {PIPELINE_STAGES.map((st) => (
-                            <th key={st}>{st}</th>
+                            <th key={st}>{st === "(blank)" ? "No status" : st}</th>
                           ))}
+                          <th>Drop rate</th>
                           <th>Schedule rate</th>
                           <th>View rate</th>
-                          <th>Drop rate</th>
+                          <th>Close rate</th>
                           <th>Lost to expired listing</th>
                         </tr>
                       </thead>
@@ -770,13 +826,14 @@ export default function DashboardPage() {
                             {PIPELINE_STAGES.map((st) => (
                               <td key={st}>{p.stages[st].toLocaleString()}</td>
                             ))}
+                            <td>{p.dropRate != null ? `${p.dropRate}%` : "—"}</td>
                             <td>
                               <strong>{p.scheduleRate != null ? `${p.scheduleRate}%` : "—"}</strong>
                             </td>
                             <td>
                               <strong>{p.viewRate != null ? `${p.viewRate}%` : "—"}</strong>
                             </td>
-                            <td>{p.dropRate != null ? `${p.dropRate}%` : "—"}</td>
+                            <td>{p.closeRate != null ? `${p.closeRate}%` : "—"}</td>
                             <td>{p.expiredPct != null ? `${p.expiredPct}%` : "—"}</td>
                           </tr>
                         ))}
@@ -794,11 +851,26 @@ export default function DashboardPage() {
                       <p className="muted small">No dated leads in this period.</p>
                     )}
                     <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                      Leads divided by how many of each weekday fall in the period, so a month with five Mondays doesn't flatter
-                      Monday. Useful for when to refresh or bump listings.
+                      Leads divided by how many of each weekday fall in the period, so a month with five Mondays doesn&apos;t
+                      flatter Monday. Follows the filters. Useful for when to refresh or bump listings.
                     </p>
                   </div>
 
+                  <div className="chart-card">
+                    <div className="chart-card-title">Average leads per day, by month</div>
+                    {stats.monthly.length ? (
+                      <BarChart data={stats.monthly} valueFormat={(v) => v.toFixed(1)} />
+                    ) : (
+                      <p className="muted small">No dated leads yet.</p>
+                    )}
+                    <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                      All leads, every month — not affected by the filters. Each month&apos;s leads ÷ its days (the current
+                      month ÷ days so far), so a half-finished month compares fairly.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="dashboard-grid">
                   <div className="chart-card">
                     <div className="chart-card-title">Agent vs customer, by platform</div>
                     {stats.leadTypeBySource.length ? (
@@ -839,117 +911,95 @@ export default function DashboardPage() {
             {activeTab === "pipeline" && (
               <div className="tab-panel">
                 <div className="chart-card">
-                  <div className="chart-card-title">PropertyGuru: lead to close</div>
-                  <p className="muted small" style={{ marginBottom: "0.9rem" }}>
-                    PropertyGuru leads only. Each step counts everyone who got that far or further, so a viewed customer is also
-                    counted as scheduled. <strong>Closed</strong> = the listing is now Expired in Property_master (sold or rented).
-                    The sheet doesn&apos;t record which person took the unit, so Closed counts customers who viewed a listing that
-                    has since closed.
-                  </p>
-                  <div className="funnel">
-                    {stats.closeFunnel.steps.map((st) => (
-                      <div className="funnel-row" key={st.label}>
-                        <div className="funnel-label">
-                          <span className="funnel-name">{st.label}</span>
-                          <span className="muted small">{st.hint}</span>
-                        </div>
-                        <div className="funnel-track">
-                          <div className="funnel-bar" style={{ width: `${st.value ? Math.max(st.pct, 0.8) : 0}%` }} />
-                        </div>
-                        <div className="funnel-num">
-                          <strong>{st.value.toLocaleString()}</strong>
-                          <span className="muted small">
-                            {st.pct}% of leads{st.stepPct !== null ? ` · ${st.stepPct}% of previous` : ""}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="muted small" style={{ marginTop: "0.9rem" }}>
-                    Listings: {stats.closeFunnel.listingsWithLeads} had PropertyGuru leads in this period;{" "}
-                    <strong>{stats.closeFunnel.closedCount} are now closed</strong>, and{" "}
-                    <strong>{stats.closeFunnel.closedWithViewing}</strong> of those had a viewing from your leads. The rest most
-                    likely closed through another channel (co-broke agent, Javier&apos;s own contacts, another platform).
-                  </p>
-                  {stats.closeFunnel.closedListings.length > 0 && (
-                    <details style={{ marginTop: "0.6rem" }}>
-                      <summary className="small">Closed listings ({stats.closeFunnel.closedCount})</summary>
-                      <div className="table-wrap table-scroll" style={{ marginTop: "0.6rem" }}>
-                        <table className="scorecard-table">
-                          <thead>
-                            <tr>
-                              <th>Closed listing</th>
-                              <th>Leads</th>
-                              <th>Customers</th>
-                              <th>Scheduled</th>
-                              <th>Viewed</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {stats.closeFunnel.closedListings.map((p) => (
-                              <tr key={p.name}>
-                                <td>{p.name}</td>
-                                <td>{p.leads}</td>
-                                <td>{p.customers}</td>
-                                <td>{p.scheduled || <span className="muted">0</span>}</td>
-                                <td>{p.viewed ? <strong>{p.viewed}</strong> : <span className="muted">0</span>}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </details>
-                  )}
-                </div>
-
-                <div className="chart-card">
                   <div className="chart-card-title">
-                    Customer pipeline ({stats.customerPipeline.total.toLocaleString()} customers)
+                    Customer funnel ({stats.customerFunnel.total.toLocaleString()} customers of{" "}
+                    {stats.customerFunnel.leads.toLocaleString()} leads)
                   </div>
                   <p className="muted small" style={{ marginBottom: "0.9rem" }}>
-                    Customers only (agents excluded), in your pipeline order — each customer is in exactly one stage, so the stages
-                    add up to the total. Scheduled / Viewed come from your Reason note; scheduling wins (e.g.
-                    "Scheduled, let Javier follow" = Scheduled). A "let Javier follow" note counts as Pending — the breakdown below
-                    shows what Pending leads are waiting on. The rest come from Status.
+                    Customers only — every % is of customers. Use the Source filter at the top to see one platform
+                    (e.g. PropertyGuru) on its own. <strong>Stopped here</strong> = customers who haven&apos;t been scheduled, by
+                    their Status (a &quot;let Javier follow&quot; note counts as Pending). <strong>Moved forward</strong> counts
+                    everyone who got that far or further, from your Reason note (scheduled / viewed). After a viewing, the
+                    listing&apos;s Property_status decides the last steps: <strong>Optioned</strong> →{" "}
+                    <strong>Expired (still listing)</strong> → <strong>Closed</strong> (Expired = sold or rented). A viewed lead
+                    whose note mentions an option, OTP or signing also counts as Optioned.
                   </p>
                   <div className="rate-row">
                     <div>
+                      <span className="daily-stats-label">Drop rate</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.dropRate ?? 0}%</span>
+                      <span className="daily-stats-sub">stopped at Drop</span>
+                    </div>
+                    <div>
                       <span className="daily-stats-label">Schedule rate</span>
                       <span className="daily-stats-value">{stats.customerPipeline.scheduleRate ?? 0}%</span>
-                      <span className="daily-stats-sub">Scheduled + Viewed</span>
+                      <span className="daily-stats-sub">scheduled or further</span>
                     </div>
                     <div>
                       <span className="daily-stats-label">View rate</span>
                       <span className="daily-stats-value">{stats.customerPipeline.viewRate ?? 0}%</span>
-                      <span className="daily-stats-sub">Viewed</span>
+                      <span className="daily-stats-sub">viewed or further</span>
                     </div>
                     <div>
-                      <span className="daily-stats-label">Pending rate</span>
-                      <span className="daily-stats-value">{stats.customerPipeline.pendingRate ?? 0}%</span>
-                      <span className="daily-stats-sub">incl. Let Javier follow</span>
+                      <span className="daily-stats-label">Option rate</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.optionRate ?? 0}%</span>
+                      <span className="daily-stats-sub">optioned or further</span>
                     </div>
                     <div>
-                      <span className="daily-stats-label">Drop rate</span>
-                      <span className="daily-stats-value">{stats.customerPipeline.dropRate ?? 0}%</span>
-                      <span className="daily-stats-sub">stage Drop</span>
+                      <span className="daily-stats-label">Close rate</span>
+                      <span className="daily-stats-value">{stats.customerPipeline.closeRate ?? 0}%</span>
+                      <span className="daily-stats-sub">Closed</span>
                     </div>
                   </div>
-                  <div className="funnel">
-                    {stats.customerPipeline.stages.map((st) => (
-                      <div className="funnel-row" key={st.label}>
-                        <div className="funnel-label">
-                          <span className="funnel-name">{st.label}</span>
-                        </div>
-                        <div className="funnel-track">
-                          <div className="funnel-bar" style={{ width: `${st.value ? Math.max(st.pct, 0.8) : 0}%` }} />
-                        </div>
-                        <div className="funnel-num">
-                          <strong>{st.value.toLocaleString()}</strong>
-                          <span className="muted small">{st.pct}%</span>
-                        </div>
-                      </div>
-                    ))}
+                  <FunnelChart steps={stats.customerFunnel.steps} />
+                </div>
+
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    Listings closing or closed ({stats.listingOutcomes.rows.length})
                   </div>
+                  <p className="muted small" style={{ marginBottom: "0.75rem" }}>
+                    Listings with leads in this period whose Property_status is past Active, in order: Optioned (
+                    {stats.listingOutcomes.optionedCount}) → Expired (still listing) ({stats.listingOutcomes.stillListingCount})
+                    → Closed ({stats.listingOutcomes.closedCount}). Only {stats.listingOutcomes.closedWithViewing} of the{" "}
+                    {stats.listingOutcomes.closedCount} closed listings had a viewing from your leads — the rest most likely
+                    closed through another channel (co-broke agent, Javier&apos;s own contacts, another platform).
+                  </p>
+                  {stats.listingOutcomes.rows.length ? (
+                    <div className="table-wrap table-scroll">
+                      <table className="scorecard-table">
+                        <thead>
+                          <tr>
+                            <th>Listing</th>
+                            <th>Status</th>
+                            <th>Leads</th>
+                            <th>Customers</th>
+                            {PIPELINE_STAGES.map((st) => (
+                              <th key={st}>{st === "(blank)" ? "No status" : st}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.listingOutcomes.rows.map((p) => (
+                            <tr key={p.name}>
+                              <td>{p.name}</td>
+                              <td className="nowrap">
+                                <span className={`flag-chip ${p.status === "Closed" ? "flag-low" : "flag-none"}`}>{p.status}</span>
+                                {p.status === "Optioned" && !p.outcome && <div className="muted small">from lead note</div>}
+                              </td>
+                              <td>{p.leads}</td>
+                              <td>{p.customers}</td>
+                              {PIPELINE_STAGES.map((st) => (
+                                <td key={st}>{p.stages[st] || <span className="muted">0</span>}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted small">No optioned or closed listings in this period.</p>
+                  )}
                 </div>
 
                 <div className="chart-card">
@@ -988,7 +1038,8 @@ export default function DashboardPage() {
                 <div className="chart-card">
                   <div className="chart-card-title">Pipeline by property</div>
                   <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                    Customers only, properties with 3+ customer leads in the period — most viewings scheduled first.
+                    Customers only, properties with 3+ customer leads in the period, stages in pipeline order — furthest along
+                    first (optioned/closed, then viewed, then scheduled).
                   </p>
                   {stats.pipelineByProperty.length ? (
                     <div className="table-wrap table-scroll">
@@ -998,11 +1049,12 @@ export default function DashboardPage() {
                             <th>Property</th>
                             <th>Customers</th>
                             {PIPELINE_STAGES.map((st) => (
-                              <th key={st}>{st}</th>
+                              <th key={st}>{st === "(blank)" ? "No status" : st}</th>
                             ))}
+                            <th>Drop rate</th>
                             <th>Schedule rate</th>
                             <th>View rate</th>
-                            <th>Drop rate</th>
+                            <th>Close rate</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1013,13 +1065,14 @@ export default function DashboardPage() {
                               {PIPELINE_STAGES.map((st) => (
                                 <td key={st}>{p.stages[st] || <span className="muted">0</span>}</td>
                               ))}
+                              <td>{p.dropRate}%</td>
                               <td>
                                 <strong>{p.scheduleRate}%</strong>
                               </td>
                               <td>
                                 <strong>{p.viewRate}%</strong>
                               </td>
-                              <td>{p.dropRate}%</td>
+                              <td>{p.closeRate}%</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1414,11 +1467,13 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
   const propertyTypeCounts = countBy(
     filteredLeads.map((l) => ({
       ...l,
-      property_type: l.property_type && l.property_type !== "#N/A" ? l.property_type : "Unspecified",
+      property_type: cleanPropertyType(l.property_type),
     })),
     "property_type"
   );
-  const propertyType = toChartData(propertyTypeCounts).sort((a, b) => b.value - a.value);
+  const propertyType = toChartData(propertyTypeCounts)
+    .sort((a, b) => b.value - a.value)
+    .map((d) => ({ ...d, axisLabel: d.label.replace(/^Residential/, "Resi").replace(/^Commercial/, "Comm") }));
 
   // Drop rate judged only on leads old enough to have gone through a
   // follow-up cycle (your 5-day rule) — a fresh lead hasn't had the
@@ -1523,7 +1578,10 @@ function computeStats(allLeads, filteredLeads, yearFilter, monthFilter, now, cha
     pipeline: computePipeline(filteredLeads, false),
     customerPipeline: computePipeline(filteredLeads, true),
     pipelineByProperty: computePipelineByProperty(filteredLeads),
-    closeFunnel: computeCloseFunnel(filteredLeads),
+    customerFunnel: computeFunnel(filteredLeads, "Customer"),
+    demandByType: computeDemandByType(filteredLeads),
+    monthly: computeMonthly(allLeads, now),
+    listingOutcomes: computeListingOutcomes(filteredLeads),
     weekdays: computeWeekdays(filteredLeads),
     repeatCustomers: computeRepeatPeople(filteredLeads, now, "Customer"),
     repeatAgents: computeRepeatPeople(filteredLeads, now, "Agent"),
@@ -1590,11 +1648,43 @@ const isExpiredReason = (l) => /expired/.test(normalizeReason(l.customer_status_
 // wins over the status: anything mentioning scheduling is Scheduled (even
 // "Scheduled, let Javier follow"), then Viewed; a "let Javier follow" note
 // counts as Pending; everything else falls back to its status.
-const PIPELINE_STAGES = ["Scheduled", "Viewed", "Follow-up", "Pending", "Check", "Drop", "(blank)"];
+// Order: the "not yet scheduled" states first, then the steps that move a
+// lead forward — Scheduled → Viewed → Optioned → Expired (still listing) →
+// Closed. The last three use the listing's Property_status (Property_master,
+// looked up into Data_raw): a viewed lead on an Optioned listing is Optioned,
+// on "Expired (still listing)" (Javier says it's done, ad still up) is that
+// stage, and on Expired is Closed — Javier never takes listings down for
+// credits, so Expired = sold or rented. A viewed lead whose note mentions an
+// option / OTP / signing also counts as Optioned.
+const PIPELINE_STAGES = [
+  "Drop",
+  "Check",
+  "Pending",
+  "Follow-up",
+  "(blank)",
+  "Scheduled",
+  "Viewed",
+  "Optioned",
+  "Expired (still listing)",
+  "Closed",
+];
+const WAITING_STAGES = ["Drop", "Check", "Pending", "Follow-up", "(blank)"];
+const FORWARD_STAGES = ["Scheduled", "Viewed", "Optioned", "Expired (still listing)", "Closed"];
+const DEAL_STAGES = ["Optioned", "Expired (still listing)", "Closed"];
+const isOptionedText = (t) => /option(ed)?|otp|sign(ed|ing)?/i.test(String(t || ""));
+// Listing outcome from Property_status: null while the listing is Active.
+function listingOutcome(l) {
+  const k = statusKey(l.property_status);
+  if (k === "expired") return "Closed";
+  if (k.startsWith("expired")) return "Expired (still listing)";
+  if (k.startsWith("option") || k === "otp") return "Optioned";
+  return null;
+}
+const isClosedListing = (l) => listingOutcome(l) === "Closed";
 function pipelineStage(l) {
   const n = normalizeReason(l.customer_status_reason);
+  if (/viewed/.test(n)) return listingOutcome(l) || (isOptionedText(n) ? "Optioned" : "Viewed");
   if (/schedul/.test(n)) return "Scheduled";
-  if (/viewed/.test(n)) return "Viewed";
   if (/javier/.test(n)) return "Pending";
   const s = statusKey(l.customer_status);
   if (s === "followup") return "Follow-up";
@@ -1603,18 +1693,24 @@ function pipelineStage(l) {
   if (s === "drop") return "Drop";
   return "(blank)";
 }
+// Leads that reached `stage` or any later forward stage.
+function reached(stages, stage) {
+  return FORWARD_STAGES.slice(FORWARD_STAGES.indexOf(stage)).reduce((t, k) => t + stages[k], 0);
+}
 function emptyStages() {
   const o = {};
   for (const s of PIPELINE_STAGES) o[s] = 0;
   return o;
 }
-// Rates are measured on customers. Schedule rate counts Scheduled + Viewed
-// (a viewing was scheduled first), View rate counts Viewed.
+// Rates are measured on customers and count everyone who got that far or
+// further (a viewed lead was scheduled first).
 function pipelineRates(stages, base) {
   const pct = (n) => (base ? Math.round((n / base) * 1000) / 10 : null);
   return {
-    scheduleRate: pct(stages["Scheduled"] + stages["Viewed"]),
-    viewRate: pct(stages["Viewed"]),
+    scheduleRate: pct(reached(stages, "Scheduled")),
+    viewRate: pct(reached(stages, "Viewed")),
+    optionRate: pct(reached(stages, "Optioned")),
+    closeRate: pct(stages["Closed"]),
     pendingRate: pct(stages["Pending"]),
     dropRate: pct(stages["Drop"]),
   };
@@ -1652,54 +1748,100 @@ function computePipeline(leads, customersOnly) {
   };
 }
 
-// PropertyGuru leads, lead to close. Each step counts everyone who reached
-// it or went further (a viewed customer was also scheduled), so the bars
-// only get shorter. "Closed" = the listing's Property_status is Expired —
-// Javier never takes a listing down for credits, so Expired means it was
-// sold or rented. The sheet doesn't say WHICH lead took it, so a closed
-// lead here is a customer who viewed a listing that has since closed.
-const isClosedListing = (l) => statusKey(l.property_status) === "expired";
-function computeCloseFunnel(filteredLeads) {
-  const pg = filteredLeads.filter((l) => /guru/i.test(l.source_data || ""));
-  const customers = pg.filter((l) => leadType(l) === "Customer");
-  const scheduled = customers.filter((l) => ["Scheduled", "Viewed"].includes(pipelineStage(l)) || /viewed/.test(normalizeReason(l.customer_status_reason)));
-  const viewed = customers.filter((l) => /viewed/.test(normalizeReason(l.customer_status_reason)));
-  const closed = viewed.filter(isClosedListing);
-  const steps = [
-    { label: "Leads", hint: "source PropertyGuru", value: pg.length },
-    { label: "Customers", hint: "not agents", value: customers.length },
-    { label: "Scheduled", hint: "note says scheduled or viewed", value: scheduled.length },
-    { label: "Viewed", hint: "note says viewed", value: viewed.length },
-    { label: "Closed", hint: "viewed, listing now Expired", value: closed.length },
-  ].map((s, i, arr) => ({
-    ...s,
-    pct: pg.length ? Math.round((s.value / pg.length) * 1000) / 10 : 0,
-    stepPct: i && arr[i - 1].value ? Math.round((s.value / arr[i - 1].value) * 1000) / 10 : null,
-  }));
+// Customer funnel, in your order: Customers → (where the rest sit: Drop /
+// Check / Pending / Follow-up / no status) → Scheduled → Viewed → Optioned →
+// Expired (still listing) → Closed. Every % is of customers (agents are left
+// out entirely). Forward steps are cumulative (a viewed lead was also
+// scheduled); the side states are not, and together with Scheduled they add
+// up to the customers.
+const FUNNEL_HINTS = {
+  Scheduled: "scheduled or further",
+  Viewed: "viewed or further",
+  Optioned: "viewed, listing optioned or further",
+  "Expired (still listing)": "Javier says done, ad still up — or closed",
+  Closed: "viewed, listing now Expired",
+};
+function computeFunnel(leads, type) {
+  const group = leads.filter((l) => leadType(l) === type);
+  const st = emptyStages();
+  for (const l of group) st[pipelineStage(l)]++;
+  const n = group.length;
+  const ofGroup = (v) => (n ? Math.round((v / n) * 1000) / 10 : 0);
+  let prev = n;
+  const forward = FORWARD_STAGES.map((k) => {
+    const v = reached(st, k);
+    const row = {
+      kind: "main",
+      label: k,
+      hint: FUNNEL_HINTS[k],
+      value: v,
+      pct: ofGroup(v),
+      // the first step's "previous" is all customers — same as the % already shown
+      stepPct: k === FORWARD_STAGES[0] ? null : prev ? Math.round((v / prev) * 1000) / 10 : 0,
+    };
+    prev = v;
+    return row;
+  });
+  return {
+    total: n,
+    leads: leads.length,
+    stages: st,
+    steps: [
+      { kind: "main", label: type === "Customer" ? "Customers" : "Agents", hint: "agents excluded", value: n, pct: 100, stepPct: null },
+      ...WAITING_STAGES.map((k) => ({
+        kind: "branch",
+        label: k === "(blank)" ? "No status" : k,
+        hint: "",
+        value: st[k],
+        pct: ofGroup(st[k]),
+      })),
+      ...forward,
+    ],
+  };
+}
 
-  // Listing view: every listing with PG leads in the period that is now closed.
+// Listings that are closing or closed (any source), from Property_status:
+// Optioned → Expired (still listing) → Closed (Expired). An Active listing
+// also shows as Optioned when one of its lead notes mentions an option,
+// OTP or signing.
+const OUTCOME_ORDER = ["Optioned", "Expired (still listing)", "Closed"];
+function computeListingOutcomes(filteredLeads) {
   const map = {};
-  for (const l of pg) {
+  for (const l of filteredLeads) {
     const name = (l.property_name || "").trim();
     if (!name) continue;
-    const p = (map[name] = map[name] || { name, closed: false, leads: 0, customers: 0, scheduled: 0, viewed: 0 });
-    if (isClosedListing(l)) p.closed = true;
+    const p = (map[name] = map[name] || { name, outcome: null, noteOption: false, leads: 0, customers: 0, stages: emptyStages() });
+    p.outcome = p.outcome || listingOutcome(l);
+    if (isOptionedText(l.customer_status_reason)) p.noteOption = true;
     p.leads++;
     if (leadType(l) !== "Customer") continue;
     p.customers++;
-    if (scheduled.includes(l)) p.scheduled++;
-    if (viewed.includes(l)) p.viewed++;
+    p.stages[pipelineStage(l)]++;
   }
-  const listings = Object.values(map);
-  const closedListings = listings
-    .filter((p) => p.closed)
-    .sort((a, b) => b.viewed - a.viewed || b.scheduled - a.scheduled || b.customers - a.customers);
+  const all = Object.values(map).map((p) => ({
+    ...p,
+    status: p.outcome || (p.noteOption ? "Optioned" : null),
+    scheduled: reached(p.stages, "Scheduled"),
+    viewed: reached(p.stages, "Viewed"),
+  }));
+  const rows = all
+    .filter((p) => p.status)
+    .sort(
+      (a, b) =>
+        OUTCOME_ORDER.indexOf(a.status) - OUTCOME_ORDER.indexOf(b.status) ||
+        b.viewed - a.viewed ||
+        b.scheduled - a.scheduled ||
+        b.customers - a.customers
+    );
+  const count = (k) => rows.filter((r) => r.status === k).length;
+  const closed = rows.filter((r) => r.status === "Closed");
   return {
-    steps,
-    listingsWithLeads: listings.length,
-    closedCount: closedListings.length,
-    closedWithViewing: closedListings.filter((p) => p.viewed > 0).length,
-    closedListings,
+    rows,
+    listingsWithLeads: all.length,
+    optionedCount: count("Optioned"),
+    stillListingCount: count("Expired (still listing)"),
+    closedCount: closed.length,
+    closedWithViewing: closed.filter((r) => r.viewed > 0).length,
   };
 }
 
@@ -1778,10 +1920,71 @@ function computePipelineByProperty(filteredLeads) {
     .map((p) => ({ ...p, ...pipelineRates(p.stages, p.customers) }))
     .sort(
       (a, b) =>
-        b.stages["Scheduled"] + b.stages["Viewed"] - (a.stages["Scheduled"] + a.stages["Viewed"]) ||
-        b.stages["Viewed"] - a.stages["Viewed"] ||
+        reached(b.stages, "Optioned") - reached(a.stages, "Optioned") ||
+        reached(b.stages, "Viewed") - reached(a.stages, "Viewed") ||
+        reached(b.stages, "Scheduled") - reached(a.stages, "Scheduled") ||
         b.customers - a.customers
     );
+}
+
+// Platform a lead came from (Source_data), as written in the sheet.
+function sourceOf(l) {
+  return (l.source_data || "").trim() || "(blank)";
+}
+
+// "Residental Rent" typo and #N/A lookups cleaned up.
+function cleanPropertyType(t) {
+  const s = String(t || "").trim().replace(/^residental/i, "Residential");
+  return !s || s === "#N/A" ? "Unspecified" : s;
+}
+
+// Leads per listing, by property type: leads ÷ number of different
+// listings of that type that got enquiries. Shows which segment pulls the
+// most interest per listing, so a big type with many listings doesn't win
+// just by volume.
+function computeDemandByType(filteredLeads) {
+  const map = {};
+  for (const l of filteredLeads) {
+    const t = cleanPropertyType(l.property_type);
+    if (t === "Unspecified") continue;
+    const r = (map[t] = map[t] || { leads: 0, customers: 0, listings: new Set() });
+    r.leads++;
+    if (leadType(l) === "Customer") r.customers++;
+    const name = (l.property_name || "").trim().toLowerCase();
+    if (name) r.listings.add(name);
+  }
+  return Object.entries(map)
+    .map(([t, r]) => ({
+      axisLabel: t.replace(/^Residential/, "Resi").replace(/^Commercial/, "Comm"),
+      label: `${t}: ${r.leads.toLocaleString()} leads across ${r.listings.size} listings (${r.customers.toLocaleString()} customers)`,
+      value: r.listings.size ? Math.round((r.leads / r.listings.size) * 10) / 10 : 0,
+      listings: r.listings.size,
+    }))
+    .sort((a, b) => b.value - a.value);
+}
+
+// Average leads per day for every month in the data — uses ALL leads, so it
+// doesn't change with the filters. The current month is divided by the days
+// so far, not the full month.
+function computeMonthly(allLeads, now) {
+  const counts = {};
+  for (const l of allLeads) {
+    if (!l.enquiry_date) continue;
+    const k = l.enquiry_date.slice(0, 7);
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  const todayKey = dayKey(now).slice(0, 7);
+  return Object.keys(counts)
+    .sort()
+    .map((k) => {
+      const [y, m] = k.split("-").map(Number);
+      const days = k === todayKey ? now.getDate() : new Date(y, m, 0).getDate();
+      return {
+        axisLabel: `${MONTH_NAMES[m - 1]} ${String(y).slice(2)}`,
+        label: `${MONTH_NAMES[m - 1]} ${y}: ${counts[k].toLocaleString()} leads over ${days} days${k === todayKey ? " so far" : ""}`,
+        value: Math.round((counts[k] / days) * 10) / 10,
+      };
+    });
 }
 
 // 5) Average leads per weekday. Divided by how many of that weekday fall
@@ -2005,15 +2208,17 @@ function computeTopPropertiesByStatus(leads, limit = 10) {
     }
   }
   const all = Object.values(map);
-  const topWithStatus = (status) =>
+  // "Expired" side = any listing no longer plain Active (Optioned,
+  // Expired (still listing), Expired); the non-Expired ones are tagged.
+  const topWithStatus = (isActive) =>
     all
-      .filter((r) => r.status === status)
+      .filter((r) => r.status && (statusKey(r.status) === "active") === isActive)
       .sort((a, b) => b.count - a.count)
       .slice(0, limit)
-      .map((r) => ({ label: r.name, value: r.count }));
+      .map((r) => ({ label: r.name, value: r.count, tag: !isActive && statusKey(r.status) !== "expired" ? r.status : undefined }));
   return {
-    active: topWithStatus("Active"),
-    expired: topWithStatus("Expired"),
+    active: topWithStatus(true),
+    expired: topWithStatus(false),
   };
 }
 

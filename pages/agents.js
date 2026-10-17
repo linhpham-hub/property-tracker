@@ -10,6 +10,8 @@ import {
   GROUPS,
   BLAST_ORDER,
   buildWarmIndex,
+  normName,
+  phoneKey,
   enrichAgents,
   histogram,
   concentration,
@@ -23,6 +25,9 @@ import {
 // Agents come live from the Agent_profile tab, grouped A–E by active
 // listings. "Enquired before" is shown for reference only — matched
 // against the agent enquiries in the leads table.
+
+// Javier's agency — pinned and highlighted in the Agencies table.
+const HOME_AGENCY = /crestbrick/i;
 
 const AGENT_TABS = [
   { key: "summary", label: "Summary" },
@@ -111,6 +116,38 @@ export default function AgentsPage() {
 
   const allAgencies = useMemo(() => (base ? agencyStats(base.agents) : []), [base]);
 
+  // Where Javier's agency stands, against every agency (ignores filters).
+  const home = useMemo(() => {
+    const g = allAgencies.find((x) => HOME_AGENCY.test(x.agency));
+    if (!g) return null;
+    const rankBy = (list, key) => [...list].sort((a, b) => b[key] - a[key]).findIndex((x) => x.agency === g.agency) + 1;
+    const peers = allAgencies.filter((x) => x.active >= 5 || x.agency === g.agency);
+    return {
+      ...g,
+      total: allAgencies.length,
+      rankAgents: rankBy(allAgencies, "agents"),
+      rankAvg: rankBy(peers, "avg"),
+      peers: peers.length,
+      topPct: g.rank / allAgencies.length,
+    };
+  }, [allAgencies]);
+  // Distinct agents who enquired (lead sheet), and how many matched a profile.
+  const enquirers = useMemo(() => {
+    const keys = new Set();
+    for (const l of agentLeads) {
+      const k = phoneKey(l.mobile) || normName(l.full_name);
+      if (k) keys.add(k);
+    }
+    const matched = base ? base.agents.filter((a) => a.warm) : [];
+    return {
+      distinct: keys.size,
+      matched: matched.length,
+      byPhone: matched.filter((a) => a.warm.by.includes("phone")).length,
+      byNameOnly: matched.filter((a) => a.warm.by === "name").length,
+    };
+  }, [agentLeads, base]);
+  const rankOf = useMemo(() => Object.fromEntries(allAgencies.map((g) => [g.agency, g.rank])), [allAgencies]);
+
   const agents = useMemo(() => {
     if (!base) return [];
     const q = search.trim().toLowerCase();
@@ -153,7 +190,7 @@ export default function AgentsPage() {
 
   const batch = useMemo(() => {
     const pool = tierFilter === "all" ? agents : agents.filter((a) => a.group === tierFilter);
-    return nextBatch(pool, batchSize);
+    return nextBatch(pool, Number(batchSize) || 0);
   }, [agents, batchSize, tierFilter]);
 
   function downloadCsv() {
@@ -169,7 +206,7 @@ export default function AgentsPage() {
   if (loading || !profile) return <div className="loading-screen">Loading…</div>;
 
   return (
-    <div>
+    <div className="theme-agent">
       <Navbar profile={profile} />
       <div className="page">
         <div className="page-header">
@@ -233,10 +270,13 @@ export default function AgentsPage() {
               <StatTile label="Agents" value={int(agents.length)} />
               <StatTile label="Active listings" value={int(view.listings)} />
               <StatTile label="Median listings / agent" value={view.median} />
-              <StatTile label="Top 10% hold" value={pct(view.conc.top.p10 || 0)} />
               <StatTile
                 label="To blast (3+ listings)"
                 value={int(BLAST_ORDER.reduce((s, k) => s + (view.prioOpen[k] || 0), 0))}
+              />
+              <StatTile
+                label="Enquired on Javier's listings"
+                value={`${int(view.warm.length)} (${pct(view.warm.length / Math.max(1, agents.length), 1)})`}
               />
               <StatTile label="Contacted so far" value={`${int(view.contacted)} (${pct(view.contacted / Math.max(1, agents.length), 1)})`} />
             </div>
@@ -326,6 +366,7 @@ export default function AgentsPage() {
                           <th>Share of agents</th>
                           <th>Listings</th>
                           <th>Share of listings</th>
+                          <th>Enquired before</th>
                           <th>Contacted</th>
                           <th>Phone on file</th>
                         </tr>
@@ -345,6 +386,9 @@ export default function AgentsPage() {
                               <ShareBar v={t.listings / Math.max(1, view.listings)} />
                             </td>
                             <td>
+                              {int(t.warm)} <span className="muted small">({pct(t.warm / Math.max(1, t.agents), 1)})</span>
+                            </td>
+                            <td>
                               {int(t.contacted)} <span className="muted small">({pct(t.contacted / Math.max(1, t.agents))})</span>
                             </td>
                             <td>{int(t.withPhone)}</td>
@@ -362,33 +406,82 @@ export default function AgentsPage() {
                 <div className="chart-card">
                   <div className="chart-card-title">Agencies — size, supply and productivity</div>
                   <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                    Top 20 agencies by active listings. "To blast" = agents in groups B–E (3+ listings). "Avg per agent"
-                    is listings ÷ agents — a productivity measure that the biggest agencies don't necessarily lead on.
+                    Top 20 agencies by active listings{home ? `, plus ${shortAgency(home.agency)} (highlighted)` : ""}. Rank = by
+                    active listings among all {int(allAgencies.length)} agencies.
                   </p>
+                  <ul className="muted small column-notes">
+                    <li>
+                      <strong>All agents</strong> and <strong>Share of all agents</strong> — every registered agent, whether
+                      or not they have a listing.
+                    </li>
+                    <li>
+                      <strong>Agents with listings</strong> — agents with at least 1 active listing, and their % of the
+                      agency.
+                    </li>
+                    <li>
+                      <strong>Listings per agent with listings</strong>, <strong>Median</strong> and <strong>To blast</strong>{" "}
+                      are measured on <em>agents with listings only</em>, so idle registrations don&apos;t drag an agency down.
+                      To blast = groups B–E (3+ listings).
+                    </li>
+                  </ul>
+                  {home && (
+                    <div className="answer-card" style={{ marginBottom: "1rem" }}>
+                      <div className="answer-title">Where {shortAgency(home.agency)} stands</div>
+                      <ul className="answer-list">
+                        <li>
+                          <strong>#{home.rank}</strong> of {int(home.total)} agencies by active listings (top{" "}
+                          {pct(home.topPct, home.topPct < 0.1 ? 1 : 0)}) — {int(home.listings)} listings, {pct(home.listingShare, 2)} of
+                          the market.
+                        </li>
+                        <li>
+                          <strong>#{home.rankAgents}</strong> by number of agents — {int(home.agents)} agents, of whom{" "}
+                          {int(home.active)} ({pct(home.activePct)}) have at least 1 active listing.
+                        </li>
+                        <li>
+                          <strong>#{home.rankAvg}</strong> of {int(home.peers)} agencies with 5+ agents with listings, by listings
+                          per agent with listings — {home.avg.toFixed(1)} each (median: {home.box.median}).
+                        </li>
+                      </ul>
+                    </div>
+                  )}
                   <div className="table-wrap table-scroll">
                     <table className="scorecard-table">
                       <thead>
                         <tr>
+                          <th>Rank</th>
                           <th>Agency</th>
-                          <th>Agents</th>
-                          <th>Share of agents</th>
+                          <th>All agents</th>
+                          <th>Share of all agents</th>
+                          <th>Agents with listings</th>
                           <th>Listings</th>
                           <th>Share of listings</th>
-                          <th>Avg per agent</th>
-                          <th>Median</th>
+                          <th>Listings per agent with listings</th>
+                          <th>Median (agents with listings)</th>
                           <th>To blast</th>
                           <th>Not yet contacted</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {view.agencies.slice(0, 20).map((g) => (
-                          <tr key={g.agency} className="clickable-row" onClick={() => setAgencyFilter(g.agency)} title="Filter to this agency">
+                        {[
+                          ...view.agencies.slice(0, 20),
+                          ...view.agencies.filter((g, i) => i >= 20 && HOME_AGENCY.test(g.agency)),
+                        ].map((g) => (
+                          <tr
+                            key={g.agency}
+                            className={`clickable-row ${HOME_AGENCY.test(g.agency) ? "home-row" : ""}`}
+                            onClick={() => setAgencyFilter(g.agency)}
+                            title="Filter to this agency"
+                          >
+                            <td className="muted">#{rankOf[g.agency]}</td>
                             <td>
                               <strong>{shortAgency(g.agency)}</strong>
                             </td>
                             <td>{int(g.agents)}</td>
                             <td>
                               <ShareBar v={g.agentShare} />
+                            </td>
+                            <td>
+                              {int(g.active)} <span className="muted small">({pct(g.activePct)})</span>
                             </td>
                             <td>{int(g.listings)}</td>
                             <td>
@@ -412,17 +505,18 @@ export default function AgentsPage() {
                 <div className="chart-card">
                   <div className="chart-card-title">Listings per agent, by agency</div>
                   <p className="muted small" style={{ marginBottom: "0.5rem" }}>
-                    Agencies with 30+ agents. Box = middle 50% of agents, white line = median, ◆ = mean, whiskers = typical
+                    Agencies with 30+ agents with listings; agents with 0 listings left out. Box = middle 50% of agents, white
+                    line = median, ◆ = mean, whiskers = typical
                     range (1.5× IQR); agents above the whisker are counted on the right. A box further right means the typical
                     agent there holds more listings.
                   </p>
                   <BoxPlot
                     valueLabel="listings"
                     rows={view.agencies
-                      .filter((g) => g.agents >= 30)
+                      .filter((g) => g.active >= 30)
                       .sort((a, b) => b.box.median - a.box.median || b.box.q3 - a.box.q3)
                       .slice(0, 10)
-                      .map((g) => ({ label: `${shortAgency(g.agency)} (${int(g.agents)})`, box: g.box }))}
+                      .map((g) => ({ label: `${shortAgency(g.agency)} (${int(g.active)})`, box: g.box }))}
                   />
                 </div>
               </div>
@@ -443,6 +537,14 @@ export default function AgentsPage() {
                         <span className="priority-chip-value">{int(view.prioOpen[p.key] || 0)}</span>
                         <span className="priority-chip-label">Group {p.label}</span>
                         <span className="muted small">{p.range}</span>
+                        {(() => {
+                          const t = view.tiers.find((x) => x.key === p.key);
+                          return t ? (
+                            <span className="muted small">
+                              {pct(t.warm / Math.max(1, t.agents), 1)} enquired before ({int(t.warm)})
+                            </span>
+                          ) : null;
+                        })()}
                       </button>
                     ))}
                   </div>
@@ -459,13 +561,16 @@ export default function AgentsPage() {
                     </span>
                     <span style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                       <span className="muted small nowrap">Batch size</span>
-                      <select value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value))}>
-                        {[50, 100, 200, 500, 1000].map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        className="batch-input"
+                        value={batchSize}
+                        onChange={(e) => setBatchSize(e.target.value === "" ? "" : Math.max(1, Math.floor(Number(e.target.value)) || 1))}
+                        onBlur={() => batchSize === "" && setBatchSize(200)}
+                        aria-label="Batch size"
+                      />
                       <button type="button" className="nowrap" onClick={downloadCsv} disabled={!batch.length}>
                         ⬇ Download CSV
                       </button>
@@ -536,11 +641,14 @@ export default function AgentsPage() {
                 </div>
 
                 <div className="chart-card">
-                  <div className="chart-card-title">Warm agents — enquired on Javier's listings ({int(view.warm.length)})</div>
+                  <div className="chart-card-title">Agents who enquired on Javier's listings ({int(view.warm.length)})</div>
                   <p className="muted small" style={{ marginBottom: "0.75rem" }}>
-                    Agents in your lead sheet (Enquirer Type "Agent", or "Agent" in the Reason note) matched to Agent_profile by
-                    phone, or by exact name when that name is unique. Name matches are very likely but not guaranteed — check the
-                    profile before messaging.
+                    {int(view.warm.length)} of {int(agents.length)} agent profiles ({pct(view.warm.length / Math.max(1, agents.length), 1)})
+                    have enquired. Matching uses <strong>phone OR name</strong>: phone (last 8 digits) is a sure match; a name
+                    counts when only one profile has it, ignoring case, word order and bracketed names. Overall,{" "}
+                    {int(enquirers.matched)} of the {int(enquirers.distinct)} different agents in your lead sheet matched a
+                    profile ({int(enquirers.byPhone)} by phone, {int(enquirers.byNameOnly)} by name only) — as you add phone
+                    numbers to Agent_profile, more will match by phone. Check name-only matches before messaging.
                   </p>
                   <div className="table-wrap table-scroll">
                     <table>
